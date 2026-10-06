@@ -12,6 +12,68 @@ DB_URI = "postgresql://postgres.mpyswshlrxwpirzdexrn:Clublifekorat3888@aws-0-ap-
 def connect_db():
     return psycopg2.connect(DB_URI)
 
+# ตรวจสอบและสร้างตารางสนับสนุนอัตโนมัติเพื่อความสมบูรณ์ 100%
+@app.on_event("startup")
+def startup_db():
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS LotteryCampaigns (
+                id SERIAL PRIMARY KEY,
+                lotto_name TEXT,
+                draw_date TEXT,
+                status TEXT DEFAULT 'Active'
+            );
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS TempDraft (
+                id SERIAL PRIMARY KEY,
+                username TEXT,
+                customer_id TEXT,
+                customer_type TEXT,
+                num TEXT,
+                amt_teng NUMERIC DEFAULT 0,
+                amt_tod NUMERIC DEFAULT 0,
+                type TEXT,
+                payout_rate NUMERIC DEFAULT 0,
+                discount NUMERIC DEFAULT 0,
+                net NUMERIC DEFAULT 0,
+                status TEXT DEFAULT 'ปกติ'
+            );
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS Transactions (
+                id SERIAL PRIMARY KEY,
+                draw_date TEXT,
+                timestamp TEXT,
+                username TEXT,
+                customer_id INTEGER,
+                customer_name TEXT,
+                customer_type TEXT,
+                bill_no TEXT,
+                num TEXT,
+                type TEXT,
+                amount NUMERIC DEFAULT 0,
+                status TEXT,
+                discount NUMERIC DEFAULT 0,
+                net NUMERIC DEFAULT 0,
+                payout_rate NUMERIC DEFAULT 0
+            );
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS DrawResults (
+                id SERIAL PRIMARY KEY,
+                draw_date TEXT UNIQUE,
+                prize_1 TEXT,
+                bottom_2 TEXT
+            );
+        """)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("Startup DB Init Warning:", e)
+
 # ================= HTML Layout & Templates =================
 
 LAYOUT = """
@@ -38,7 +100,7 @@ LAYOUT = """
     </script>
 </head>
 <body class="bg-light">
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark px-3">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark px-3 shadow">
         <a class="navbar-brand fw-bold text-warning" href="/buy?user={{ username }}&draw={{ draw_date }}">☁️ Lotto ERP</a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
             <span class="navbar-toggler-icon"></span>
@@ -54,12 +116,12 @@ LAYOUT = """
                 {% endif %}
                 <li class="nav-item"><a class="nav-link" href="/block?user={{ username }}&draw={{ draw_date }}">🚫 จัดการเลขอั้น</a></li>
                 <li class="nav-item"><a class="nav-link" href="/customers?user={{ username }}&draw={{ draw_date }}">👥 จัดการลูกค้า</a></li>
-                <li class="nav-item"><a class="nav-link" href="/users?user={{ username }}&draw={{ draw_date }}">⚙️️ จัดการสมาชิก</a></li>
+                <li class="nav-item"><a class="nav-link" href="/users?user={{ username }}&draw={{ draw_date }}">⚙ จัดการสมาชิก</a></li>
             </ul>
             <div class="d-flex align-items-center">
                 <span id="live-clock" class="text-info fw-bold me-3 font-monospace">🕒 กำลังโหลด...</span>
                 <span class="text-light me-3">ผู้ใช้: <b>{{ username }} ({{ role }})</b></span>
-                <a href="/campaigns?user={{ username }}" class="btn btn-outline-warning btn-sm me-2">📌 จัดการ/เปิดงวดหวย</a>
+                <a href="/campaigns?user={{ username }}" class="btn btn-warning btn-sm me-2 fw-bold text-dark">📌 เปลี่ยนงวด</a>
                 <a href="/logout" class="btn btn-outline-danger btn-sm">ออกจากระบบ</a>
             </div>
         </div>
@@ -93,22 +155,22 @@ LOGIN_TEMPLATE = """
     <title>Login - Lotto ERP Cloud</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
-<body class="bg-dark text-light d-flex align-items-center justify-content-center" style="height: 100vh;">
-    <div class="card bg-secondary p-4 shadow" style="width: 350px;">
-        <h3 class="text-center text-warning mb-4">☁️ Lotto ERP Cloud</h3>
+<body class="bg-light d-flex align-items-center justify-content-center" style="height: 100vh;">
+    <div class="card bg-white p-4 shadow border" style="width: 380px;">
+        <h3 class="text-center text-primary mb-4 fw-bold">☁️ Lotto ERP Cloud</h3>
         {% if error %}
             <div class="alert alert-danger py-2 text-center">{{ error }}</div>
         {% endif %}
         <form method="POST" action="/login">
             <div class="mb-3">
-                <label class="form-label">ชื่อผู้ใช้งาน (Username)</label>
+                <label class="form-label fw-bold text-dark">ชื่อผู้ใช้งาน (Username)</label>
                 <input type="text" name="username" class="form-control" required autofocus>
             </div>
             <div class="mb-3">
-                <label class="form-label">รหัสผ่าน (Password)</label>
+                <label class="form-label fw-bold text-dark">รหัสผ่าน (Password)</label>
                 <input type="password" name="password" class="form-control" required>
             </div>
-            <button type="submit" class="btn btn-warning w-100 fw-bold">เข้าสู่ระบบ</button>
+            <button type="submit" class="btn btn-primary w-100 fw-bold py-2">เข้าสู่ระบบ</button>
         </form>
     </div>
 </body>
@@ -124,47 +186,47 @@ CAMPAIGN_TEMPLATE = """
     <title>เลือกงวดหวย - Lotto ERP</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
-<body class="bg-dark text-light">
+<body class="bg-light">
     <div class="container my-5" style="max-width: 700px;">
-        <div class="card bg-secondary p-4 shadow">
-            <h2 class="text-center text-warning mb-4">📌 จัดการและเลือกงวดหวย</h2>
+        <div class="card bg-white p-4 shadow border">
+            <h2 class="text-center text-primary mb-4 fw-bold">📌 จัดการและเลือกงวดหวย</h2>
             
             {% if role == 'Admin' %}
-            <div class="card bg-dark p-3 mb-4 border border-warning">
-                <h5 class="text-warning mb-3">➕ เปิดงวดหวยใหม่ (Admin)</h5>
+            <div class="card bg-light p-3 mb-4 border border-primary">
+                <h5 class="text-primary mb-3 fw-bold">➕ เปิดงวดหวยใหม่ (Admin)</h5>
                 <form method="POST" action="/create-campaign">
                     <input type="hidden" name="user" value="{{ username }}">
                     <div class="mb-2">
-                        <label class="form-label">ชื่อหวย:</label>
+                        <label class="form-label fw-bold text-dark">ชื่อหวย:</label>
                         <input type="text" name="lotto_name" class="form-control" placeholder="เช่น หวยรัฐบาล, หวยลาว" required>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">งวดวันที่:</label>
+                        <label class="form-label fw-bold text-dark">งวดวันที่:</label>
                         <input type="text" name="draw_date" class="form-control" placeholder="เช่น 16 ตุลาคม 2026" required>
                     </div>
-                    <button type="submit" class="btn btn-warning w-100 fw-bold">เปิดงวดใหม่</button>
+                    <button type="submit" class="btn btn-primary w-100 fw-bold">เปิดงวดใหม่</button>
                 </form>
             </div>
             {% endif %}
 
-            <h5 class="text-light mb-3">รายการงวดหวยทั้งหมด</h5>
+            <h5 class="text-dark mb-3 fw-bold">รายการงวดหวยทั้งหมด</h5>
             <div class="list-group">
                 {% for camp in campaigns %}
-                    <div class="list-group-item list-group-item-dark py-3 mb-2 d-flex justify-content-between align-items-center border border-light">
+                    <div class="list-group-item list-group-item-light py-3 mb-2 d-flex justify-content-between align-items-center border">
                         <div>
-                            <a href="/buy?user={{ username }}&draw={{ camp[0] }} งวด {{ camp[1] }}" class="text-warning text-decoration-none fs-5 fw-bold">
+                            <a href="/buy?user={{ username }}&draw={{ camp[0] }} งวด {{ camp[1] }}" class="text-primary text-decoration-none fs-5 fw-bold">
                                 🎯 {{ camp[0] }} งวดวันที่ {{ camp[1] }}
                             </a>
                             <div class="small text-muted mt-1">สถานะ: <span class="badge {% if camp[2] == 'Active' %}bg-success{% else %}bg-danger{% endif %}">{{ camp[2] }}</span></div>
                         </div>
                         {% if role == 'Admin' %}
                         <div>
-                            <a href="/toggle-campaign?id={{ camp[3] }}&user={{ username }}" class="btn btn-outline-light btn-sm">สลับเปิด/ปิด</a>
+                            <a href="/toggle-campaign?id={{ camp[3] }}&user={{ username }}" class="btn btn-outline-dark btn-sm fw-bold">สลับเปิด/ปิด</a>
                         </div>
                         {% endif %}
                     </div>
                 {% else %}
-                    <div class="text-center text-white py-4">ยังไม่มีงวดหวยในฐานข้อมูล</div>
+                    <div class="text-center text-muted py-4">ยังไม่มีงวดหวยในฐานข้อมูล</div>
                 {% endfor %}
             </div>
             
@@ -185,7 +247,7 @@ BUY_CONTENT = """
                 <input type="hidden" name="user" value="{{ username }}">
                 <input type="hidden" name="draw" value="{{ draw_date }}">
                 <div class="mb-3">
-                    <label class="form-label fw-bold">เลือกลูกค้า / สายงาน:</label>
+                    <label class="form-label fw-bold text-dark">เลือกลูกค้า / สายงาน:</label>
                     <select name="customer_info" id="customerSelect" class="form-select form-select-lg" onchange="document.getElementById('custForm').submit()">
                         {% for c in customers %}
                             <option value="{{ c[0] }}|{{ c[1] }}|{{ c[2] }}" {% if selected_target_raw and selected_target_raw == c[0]|string ~ '|' ~ c[1] ~ '|' ~ c[2] %}selected{% endif %}>{{ c[1] }} ({{ c[2] }})</option>
@@ -199,7 +261,7 @@ BUY_CONTENT = """
                 <input type="hidden" name="draw" value="{{ draw_date }}">
                 <input type="hidden" name="customer_info" id="hiddenCustomerInfo" value="{{ selected_target_raw }}">
                 <div class="mb-3">
-                    <label class="form-label fw-bold">คีย์รายการ (เช่น 123=100*100, 456=50 หรือ 12,34=50):</label>
+                    <label class="form-label fw-bold text-dark">คีย์รายการ (เช่น 123=100*100, 456=50 หรือ 12,34=50):</label>
                     <input type="text" name="raw_input" class="form-control form-control-lg" placeholder="พิมพ์เลขและราคา..." required autofocus>
                     <div class="form-text text-danger">*ห้ามใส่ลูกน้ำในยอดเงิน เช่น 1000 ห้ามพิมพ์ 1,000</div>
                 </div>
@@ -215,7 +277,7 @@ BUY_CONTENT = """
 
         <!-- รายการร่างแสดงรายละเอียดครบถ้วนก่อนยืนยัน -->
         <div class="card shadow p-4 mb-4">
-            <h4 class="text-primary mb-3">📋 1. รายการร่าง (รอยืนยันโพย)</h4>
+            <h4 class="text-primary mb-3 fw-bold">📋 1. รายการร่าง (รอยืนยันโพย)</h4>
             <div class="table-responsive">
                 <table class="table table-striped table-bordered text-center align-middle">
                     <thead class="table-dark">
@@ -225,12 +287,12 @@ BUY_CONTENT = """
                         {% for d in drafts %}
                         <tr>
                             <td><b>{{ d[1] }}</b></td>
-                            <td>{{ d[5] }}</td>
+                            <td>{{ d[4] }}</td>
                             <td>{{ "{:,.2f}".format(d[2] or 0) }}</td>
-                            <td>{{ d[6] }}</td>
-                            <td>{{ d[7] }}%</td>
-                            <td>{{ "{:,.2f}".format(d[8] or 0) }}</td>
-                            <td><span class="badge bg-danger">{{ d[4] }}</span></td>
+                            <td>{{ d[5] }}</td>
+                            <td>{{ d[6] }}%</td>
+                            <td>{{ "{:,.2f}".format(d[7] or 0) }}</td>
+                            <td><span class="badge bg-danger">{{ d[3] }}</span></td>
                         </tr>
                         {% else %}
                         <tr><td colspan="7" class="text-muted">ยังไม่มีรายการในร่าง</td></tr>
@@ -240,8 +302,8 @@ BUY_CONTENT = """
             </div>
 
             {% if drafts %}
-            <div class="card bg-light p-3 mb-3">
-                <div class="row text-center fw-bold">
+            <div class="card bg-light p-3 mb-3 border">
+                <div class="row text-center fw-bold text-dark">
                     <div class="col">ยอดซื้อรวม: ฿{{ "{:,.2f}".format(draft_totals.sum_amt) }}</div>
                     <div class="col text-danger">ส่วนลดรวม: ฿{{ "{:,.2f}".format(draft_totals.sum_disc) }}</div>
                     <div class="col text-primary">ยอดสุทธิที่ต้องชำระ: ฿{{ "{:,.2f}".format(draft_totals.sum_net) }}</div>
@@ -257,10 +319,10 @@ BUY_CONTENT = """
         </div>
 
         <div class="card shadow p-4">
-            <h4 class="text-success mb-3">📜 2. บิลล่าสุดของลูกค้ารายนี้</h4>
+            <h4 class="text-success mb-3 fw-bold">📜 2. บิลล่าสุดของลูกค้ารายนี้</h4>
             <div class="table-responsive">
                 <table class="table table-striped table-bordered text-center align-middle">
-                    <thead class="table-success">
+                    <thead class="table-success text-dark">
                         <tr><th>เลขที่บิล</th><th>เวลา</th><th>เลข</th><th>ประเภท</th><th>ยอดซื้อ</th><th>สุทธิ</th><th>สถานะ</th></tr>
                     </thead>
                     <tbody>
@@ -278,14 +340,14 @@ BUY_CONTENT = """
     </div>
 
     <div class="col-lg-4">
-        <div class="card shadow p-3 bg-white mb-4">
+        <div class="card shadow p-3 bg-white mb-4 border">
             <h5 class="text-danger fw-bold mb-3">🚫 เลขอั้น (งวดปัจจุบัน)</h5>
             <label class="fw-bold text-dark mb-1">เลขอั้นปิดรับ:</label>
             <textarea class="form-control mb-2 bg-light text-danger fw-bold" rows="3" readonly>{{ block_closed }}</textarea>
             <label class="fw-bold text-dark mb-1">เลขอั้น 3 ตัว (จ่ายครึ่ง):</label>
-            <textarea class="form-control mb-2 bg-light" rows="4" readonly>{{ block_3d }}</textarea>
+            <textarea class="form-control mb-2 bg-light text-dark" rows="4" readonly>{{ block_3d }}</textarea>
             <label class="fw-bold text-dark mb-1">เลขอั้น 2 ตัว (จ่ายครึ่ง):</label>
-            <textarea class="form-control bg-light" rows="4" readonly>{{ block_2d }}</textarea>
+            <textarea class="form-control bg-light text-dark" rows="4" readonly>{{ block_2d }}</textarea>
         </div>
     </div>
 </div>
@@ -293,16 +355,16 @@ BUY_CONTENT = """
 
 DASHBOARD_CONTENT = """
 <div class="card shadow p-4">
-    <h2 class="text-primary mb-4">📊 สรุปยอดขายรวมประจำงวด</h2>
+    <h2 class="text-primary mb-4 fw-bold">📊 สรุปยอดขายรวมประจำงวด</h2>
     <div class="row text-center mb-4">
         <div class="col-md-6 mb-3">
-            <div class="p-3 bg-warning text-dark rounded shadow fw-bold fs-4">ยอดรวม 2 ตัว: ฿{{ "{:,.2f}".format(tot_2d) }}</div>
+            <div class="p-3 bg-warning text-dark rounded shadow fw-bold fs-4 border">ยอดรวม 2 ตัว: ฿{{ "{:,.2f}".format(tot_2d) }}</div>
         </div>
         <div class="col-md-6 mb-3">
-            <div class="p-3 bg-warning text-dark rounded shadow fw-bold fs-4">ยอดรวม 3 ตัว: ฿{{ "{:,.2f}".format(tot_3d) }}</div>
+            <div class="p-3 bg-warning text-dark rounded shadow fw-bold fs-4 border">ยอดรวม 3 ตัว: ฿{{ "{:,.2f}".format(tot_3d) }}</div>
         </div>
     </div>
-    <h4 class="mb-3">รายละเอียดหมายเลขที่มียอดซื้อ</h4>
+    <h4 class="mb-3 fw-bold text-dark">รายละเอียดหมายเลขที่มียอดซื้อ</h4>
     <div class="table-responsive">
         <table class="table table-striped table-bordered text-center align-middle">
             <thead class="table-dark">
@@ -324,13 +386,13 @@ DASHBOARD_CONTENT = """
 
 REPORTS_CONTENT = """
 <div class="card shadow p-4">
-    <h2 class="text-primary mb-4">📈 รายงานสรุปยอดขายและสถิติต่างๆ</h2>
+    <h2 class="text-primary mb-4 fw-bold">📈 รายงานสรุปยอดขายและสถิติต่างๆ</h2>
     <div class="row text-center mb-4">
-        <div class="col-md-4 mb-2"><div class="p-3 bg-light border rounded"><h5>ยอดขายรวมทั้งสิ้น</h5><h3 class="text-dark">฿{{ "{:,.2f}".format(rep_total_sales) }}</h3></div></div>
-        <div class="col-md-4 mb-2"><div class="p-3 bg-light border rounded"><h5>ส่วนลดรวม</h5><h3 class="text-danger">฿{{ "{:,.2f}".format(rep_total_disc) }}</h3></div></div>
-        <div class="col-md-4 mb-2"><div class="p-3 bg-light border rounded"><h5>ยอดสุทธิหลังหักส่วนลด</h5><h3 class="text-primary">฿{{ "{:,.2f}".format(rep_total_net) }}</h3></div></div>
+        <div class="col-md-4 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>ยอดขายรวมทั้งสิ้น</h5><h3 class="text-dark fw-bold">฿{{ "{:,.2f}".format(rep_total_sales) }}</h3></div></div>
+        <div class="col-md-4 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>ส่วนลดรวม</h5><h3 class="text-danger fw-bold">฿{{ "{:,.2f}".format(rep_total_disc) }}</h3></div></div>
+        <div class="col-md-4 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>ยอดสุทธิหลังหักส่วนลด</h5><h3 class="text-primary fw-bold">฿{{ "{:,.2f}".format(rep_total_net) }}</h3></div></div>
     </div>
-    <h4 class="mb-3">สรุปยอดขายแยกตามรายชื่อลูกค้า</h4>
+    <h4 class="mb-3 fw-bold text-dark">สรุปยอดขายแยกตามรายชื่อลูกค้า</h4>
     <div class="table-responsive">
         <table class="table table-striped table-bordered text-center align-middle">
             <thead class="table-dark">
@@ -352,7 +414,7 @@ REPORTS_CONTENT = """
 
 RISK_CONTENT = """
 <div class="card shadow p-4">
-    <h2 class="text-danger mb-4">⚠️ ตรวจสอบความเสี่ยงและยอดแทงรวม (Admin Control)</h2>
+    <h2 class="text-danger mb-4 fw-bold">⚠️ ตรวจสอบความเสี่ยงและยอดแทงรวม (Admin Control)</h2>
     <div class="table-responsive">
         <table class="table table-striped table-bordered text-center align-middle">
             <thead class="table-dark">
@@ -383,16 +445,16 @@ RISK_CONTENT = """
 
 RESULTS_CONTENT = """
 <div class="card shadow p-4 mb-4">
-    <h2 class="text-success mb-3">🏆 บันทึกผลการออกรางวัลประจำงวด</h2>
+    <h2 class="text-success mb-3 fw-bold">🏆 บันทึกผลการออกรางวัลประจำงวด</h2>
     <form method="POST" action="/save-results" class="row g-3">
         <input type="hidden" name="user" value="{{ username }}">
         <input type="hidden" name="draw" value="{{ draw_date }}">
         <div class="col-md-6">
-            <label class="form-label fw-bold">รางวัลที่ 1 (3 ตัวตรง):</label>
+            <label class="form-label fw-bold text-dark">รางวัลที่ 1 (3 ตัวตรง):</label>
             <input type="text" name="prize_1" class="form-control form-control-lg" value="{{ prize_1 }}" placeholder="เช่น 123" required>
         </div>
         <div class="col-md-6">
-            <label class="form-label fw-bold">เลขท้าย 2 ตัว:</label>
+            <label class="form-label fw-bold text-dark">เลขท้าย 2 ตัว:</label>
             <input type="text" name="bottom_2" class="form-control form-control-lg" value="{{ bottom_2 }}" placeholder="เช่น 45" required>
         </div>
         <div class="col-12">
@@ -402,22 +464,22 @@ RESULTS_CONTENT = """
 </div>
 
 <div class="card shadow p-4">
-    <h3 class="text-primary mb-3">📊 สรุปผลกำไร / ขาดทุน และรายงานผลรางวัล</h3>
+    <h3 class="text-primary mb-3 fw-bold">📊 สรุปผลกำไร / ขาดทุน และรายงานผลรางวัล</h3>
     <div class="row text-center mb-4">
-        <div class="col-md-4 mb-2"><div class="p-3 bg-light border rounded"><h5>ยอดขายรวม</h5><h3 class="text-dark">฿{{ "{:,.2f}".format(total_sales) }}</h3></div></div>
-        <div class="col-md-4 mb-2"><div class="p-3 bg-light border rounded"><h5>หักส่วนลดรวม</h5><h3 class="text-danger">฿{{ "{:,.2f}".format(total_discount) }}</h3></div></div>
-        <div class="col-md-4 mb-2"><div class="p-3 bg-light border rounded"><h5>ยอดขายสุทธิ (คงเหลือ)</h5><h3 class="text-primary">฿{{ "{:,.2f}".format(total_net) }}</h3></div></div>
+        <div class="col-md-4 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>ยอดขายรวม</h5><h3 class="text-dark fw-bold">฿{{ "{:,.2f}".format(total_sales) }}</h3></div></div>
+        <div class="col-md-4 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>หักส่วนลดรวม</h5><h3 class="text-danger fw-bold">฿{{ "{:,.2f}".format(total_discount) }}</h3></div></div>
+        <div class="col-md-4 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>ยอดขายสุทธิ (คงเหลือ)</h5><h3 class="text-primary fw-bold">฿{{ "{:,.2f}".format(total_net) }}</h3></div></div>
     </div>
     <div class="row text-center mb-4">
-        <div class="col-md-6 mb-2"><div class="p-3 bg-light border rounded"><h5>จ่ายเงินรางวัลรวม</h5><h3 class="text-danger">฿{{ "{:,.2f}".format(total_payout) }}</h3></div></div>
-        <div class="col-md-6 mb-2"><div class="p-3 bg-warning text-dark border rounded"><h5>กำไร / ขาดทุนสุทธิ</h5><h3 class="fw-bold">฿{{ "{:,.2f}".format(total_net - total_payout) }}</h3></div></div>
+        <div class="col-md-6 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>จ่ายเงินรางวัลรวม</h5><h3 class="text-danger fw-bold">฿{{ "{:,.2f}".format(total_payout) }}</h3></div></div>
+        <div class="col-md-6 mb-2"><div class="p-3 bg-warning text-dark border rounded shadow-sm"><h5>กำไร / ขาดทุนสุทธิ</h5><h3 class="fw-bold">฿{{ "{:,.2f}".format(total_net - total_payout) }}</h3></div></div>
     </div>
 
-    <h4 class="mt-4 mb-3">รายชื่อผู้ถูกรางวัลในงวดนี้</h4>
+    <h4 class="mt-4 mb-3 fw-bold text-dark">รายชื่อผู้ถูกรางวัลในงวดนี้</h4>
     <div class="table-responsive">
         <table class="table table-striped table-bordered text-center align-middle">
             <thead class="table-dark">
-                <tr><th>ผู้ซื้อ / ลูกค้า</th><th>เลขอั้น/เลขที่ซื้อ</th><th>ประเภท</th><th>ยอดซื้อ</th><th>เงินรางวัลที่ได้รับ</th></tr>
+                <tr><th>ผู้ซื้อ / ลูกค้า</th><th>เลขที่ซื้อ</th><th>ประเภท</th><th>ยอดซื้อ</th><th>เงินรางวัลที่ได้รับ</th></tr>
             </thead>
             <tbody>
                 {% for w in winners %}
@@ -435,16 +497,16 @@ RESULTS_CONTENT = """
 
 BLOCK_CONTENT = """
 <div class="card shadow p-4">
-    <h3 class="text-danger mb-3">🚫 จัดการเลขอั้น</h3>
+    <h3 class="text-danger mb-3 fw-bold">🚫 จัดการเลขอั้น</h3>
     <form method="POST" action="/save-block" class="row g-3 mb-4">
         <input type="hidden" name="user" value="{{ username }}">
         <input type="hidden" name="draw" value="{{ draw_date }}">
         <div class="col-md-4">
-            <label class="form-label fw-bold">พิมพ์เลข (คั่นด้วย ,):</label>
+            <label class="form-label fw-bold text-dark">พิมพ์เลข (คั่นด้วย ,):</label>
             <input type="text" name="raw_nums" class="form-control" placeholder="เช่น 123, 456" required>
         </div>
         <div class="col-md-3">
-            <label class="form-label fw-bold">สถานะอั้น:</label>
+            <label class="form-label fw-bold text-dark">สถานะอั้น:</label>
             <select name="block_status" class="form-select">
                 <option value="อั้นจ่ายครึ่ง">อั้นจ่ายครึ่ง</option>
                 <option value="ปิดรับ">ปิดรับ</option>
@@ -453,7 +515,7 @@ BLOCK_CONTENT = """
         <div class="col-md-3 d-flex align-items-end">
             <div class="form-check">
                 <input class="form-check-input" type="checkbox" name="do_perm" value="1" id="permCheck">
-                <label class="form-check-label fw-bold" for="permCheck">อั้นกลับด้วย (6กลับ)</label>
+                <label class="form-check-label fw-bold text-dark" for="permCheck">อั้นกลับด้วย (6กลับ)</label>
             </div>
         </div>
         <div class="col-md-2 d-flex align-items-end">
@@ -461,7 +523,7 @@ BLOCK_CONTENT = """
         </div>
     </form>
     
-    <h4 class="mb-3">รายการเลขอั้นในระบบ</h4>
+    <h4 class="mb-3 fw-bold text-dark">รายการเลขอั้นในระบบ</h4>
     <div class="table-responsive">
         <table class="table table-striped table-bordered text-center align-middle">
             <thead class="table-dark">
@@ -486,24 +548,24 @@ CUSTOMER_CONTENT = """
 <div class="row">
     <div class="col-md-4 mb-4">
         <div class="card shadow p-4">
-            <h4 class="text-success mb-3">➕ เพิ่มลูกค้ารายใหม่</h4>
+            <h4 class="text-success mb-3 fw-bold">➕ เพิ่มลูกค้ารายใหม่</h4>
             <form method="POST" action="/save-customer">
                 <input type="hidden" name="user" value="{{ username }}">
                 <input type="hidden" name="draw" value="{{ draw_date }}">
                 <div class="mb-3">
-                    <label class="form-label fw-bold">ชื่อลูกค้า:</label>
+                    <label class="form-label fw-bold text-dark">ชื่อลูกค้า:</label>
                     <input type="text" name="name" class="form-control" required>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label fw-bold">ส่วนลดรวม (%):</label>
+                    <label class="form-label fw-bold text-dark">ส่วนลดรวม (%):</label>
                     <input type="number" step="0.01" name="disc_total" class="form-control" value="0">
                 </div>
                 <div class="row mb-3">
-                    <div class="col"><label class="form-label">จ่าย 3 ตรง:</label><input type="number" step="0.01" name="pay_3d" class="form-control" value="0"></div>
-                    <div class="col"><label class="form-label">จ่าย 3 โต๊ด:</label><input type="number" step="0.01" name="pay_3tod" class="form-control" value="0"></div>
+                    <div class="col"><label class="form-label text-dark">จ่าย 3 ตรง:</label><input type="number" step="0.01" name="pay_3d" class="form-control" value="0"></div>
+                    <div class="col"><label class="form-label text-dark">จ่าย 3 โต๊ด:</label><input type="number" step="0.01" name="pay_3tod" class="form-control" value="0"></div>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">จ่าย 2 ตัว:</label><input type="number" step="0.01" name="pay_2d" class="form-control" value="0">
+                    <label class="form-label text-dark">จ่าย 2 ตัว:</label><input type="number" step="0.01" name="pay_2d" class="form-control" value="0">
                 </div>
                 <button type="submit" class="btn btn-success w-100 fw-bold">บันทึกลูกค้า</button>
             </form>
@@ -511,7 +573,7 @@ CUSTOMER_CONTENT = """
     </div>
     <div class="col-md-8">
         <div class="card shadow p-4">
-            <h4 class="text-primary mb-3">👥 รายชื่อลูกค้าของคุณ</h4>
+            <h4 class="text-primary mb-3 fw-bold">👥 รายชื่อลูกค้าของคุณ</h4>
             <div class="table-responsive">
                 <table class="table table-striped table-bordered text-center align-middle">
                     <thead class="table-dark">
@@ -537,20 +599,20 @@ USERS_CONTENT = """
 <div class="row">
     <div class="col-md-4 mb-4">
         <div class="card shadow p-4">
-            <h4 class="text-success mb-3">⚙️ สร้างสายงานสมาชิก (4 ระดับ)</h4>
+            <h4 class="text-success mb-3 fw-bold">⚙️ สร้างสายงานสมาชิก (4 ระดับ)</h4>
             <form method="POST" action="/save-user-level">
                 <input type="hidden" name="user" value="{{ username }}">
                 <input type="hidden" name="draw" value="{{ draw_date }}">
                 <div class="mb-3">
-                    <label class="form-label fw-bold">Username:</label>
+                    <label class="form-label fw-bold text-dark">Username:</label>
                     <input type="text" name="new_username" class="form-control" required>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label fw-bold">Password:</label>
+                    <label class="form-label fw-bold text-dark">Password:</label>
                     <input type="password" name="new_password" class="form-control" required>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label fw-bold">ระดับสิทธิ์ (Role):</label>
+                    <label class="form-label fw-bold text-dark">ระดับสิทธิ์ (Role):</label>
                     <select name="new_role" class="form-select">
                         <option value="Admin">Admin</option>
                         <option value="Master Agent">Master Agent</option>
@@ -564,7 +626,7 @@ USERS_CONTENT = """
     </div>
     <div class="col-md-8">
         <div class="card shadow p-4">
-            <h4 class="text-primary mb-3">🗂️ รายชื่อสมาชิกใต้สายงาน</h4>
+            <h4 class="text-primary mb-3 fw-bold">🗂️ รายชื่อสมาชิกใต้สายงาน</h4>
             <div class="table-responsive">
                 <table class="table table-striped table-bordered text-center align-middle">
                     <thead class="table-dark">
@@ -700,7 +762,7 @@ def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
         sum_amt, sum_disc, sum_net = 0.0, 0.0, 0.0
         
         if c_id:
-            c.execute("SELECT id, num, amount, status, type, payout_rate, discount, net FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
+            c.execute("SELECT id, num, amt_teng, status, type, payout_rate, discount, net FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
             for row in c.fetchall():
                 drafts.append(row)
                 sum_amt += float(row[2] or 0)
@@ -737,7 +799,6 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
         conn = connect_db()
         c = conn.cursor()
         
-        # ดึงอัตราจ่ายและส่วนลดของลูกค้าคนนี้
         pay_3d, pay_3tod, pay_2d, disc_total = 500.0, 100.0, 90.0, 0.0
         if c_type == 'Customer':
             c.execute("SELECT pay_3d, pay_3tod, pay_2d, disc_total FROM Customers WHERE id=%s", (c_id,))
@@ -767,23 +828,23 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
                         if top > 0:
                             disc_amt = top * (disc_total / 100.0)
                             net_amt = top - disc_amt
-                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amount, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
                                       (user, c_id, c_type, n, top, "3ตัวตรง", pay_3d, disc_amt, net_amt, "ปกติ"))
                         if bot > 0:
                             disc_amt = bot * (disc_total / 100.0)
                             net_amt = bot - disc_amt
-                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amount, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
                                       (user, c_id, c_type, n, bot, "3ตัวโต๊ด", pay_3tod, disc_amt, net_amt, "ปกติ"))
                     elif len(n) == 2:
                         if top > 0:
                             disc_amt = top * (disc_total / 100.0)
                             net_amt = top - disc_amt
-                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amount, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
                                       (user, c_id, c_type, n, top, "2ตัวบน", pay_2d, disc_amt, net_amt, "ปกติ"))
                         if bot > 0:
                             disc_amt = bot * (disc_total / 100.0)
                             net_amt = bot - disc_amt
-                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amount, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
                                       (user, c_id, c_type, n, bot, "2ตัวล่าง", pay_2d, disc_amt, net_amt, "ปกติ"))
                 hold_nums = []
             else:
@@ -801,7 +862,7 @@ def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: st
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("SELECT num, type, amount, payout_rate, discount, net, status FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
+        c.execute("SELECT num, type, amt_teng, payout_rate, discount, net, status FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
         drafts = c.fetchall()
         if drafts:
             bill_no = f"BILL-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:21]}-{c_id}"
