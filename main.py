@@ -7,7 +7,6 @@ import itertools
 
 app = FastAPI(title="Lotto ERP Full Enterprise Cloud")
 
-# ⚠ อย่าลืมเปลี่ยน [YOUR-PASSWORD] เป็นรหัสผ่านฐานข้อมูล Supabase ของคุณ
 DB_URI = "postgresql://postgres.mpyswshlrxwpirzdexrn:Clublifekorat3888@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres"
 
 def connect_db():
@@ -48,13 +47,14 @@ LAYOUT = """
             <ul class="navbar-nav me-auto">
                 <li class="nav-item"><a class="nav-link" href="/dashboard?user={{ username }}&draw={{ draw_date }}">📊 แดชบอร์ด</a></li>
                 <li class="nav-item"><a class="nav-link" href="/buy?user={{ username }}&draw={{ draw_date }}">🛒 บันทึกโพย</a></li>
+                <li class="nav-item"><a class="nav-link" href="/reports?user={{ username }}&draw={{ draw_date }}">📈 รายงานยอดขาย</a></li>
                 {% if role in ['Admin', 'Master Agent'] %}
                 <li class="nav-item"><a class="nav-link" href="/risk?user={{ username }}&draw={{ draw_date }}">⚠️ เช็คความเสี่ยง</a></li>
                 <li class="nav-item"><a class="nav-link" href="/results?user={{ username }}&draw={{ draw_date }}">🏆 ออกผลรางวัล</a></li>
                 {% endif %}
                 <li class="nav-item"><a class="nav-link" href="/block?user={{ username }}&draw={{ draw_date }}">🚫 จัดการเลขอั้น</a></li>
                 <li class="nav-item"><a class="nav-link" href="/customers?user={{ username }}&draw={{ draw_date }}">👥 จัดการลูกค้า</a></li>
-                <li class="nav-item"><a class="nav-link" href="/users?user={{ username }}&draw={{ draw_date }}">⚙️ จัดการสมาชิก</a></li>
+                <li class="nav-item"><a class="nav-link" href="/users?user={{ username }}&draw={{ draw_date }}">⚙️️ จัดการสมาชิก</a></li>
             </ul>
             <div class="d-flex align-items-center">
                 <span id="live-clock" class="text-info fw-bold me-3 font-monospace">🕒 กำลังโหลด...</span>
@@ -125,7 +125,7 @@ CAMPAIGN_TEMPLATE = """
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="bg-dark text-light">
-    <div class="container my-5" style="max-width: 600px;">
+    <div class="container my-5" style="max-width: 700px;">
         <div class="card bg-secondary p-4 shadow">
             <h2 class="text-center text-warning mb-4">📌 จัดการและเลือกงวดหวย</h2>
             
@@ -147,12 +147,22 @@ CAMPAIGN_TEMPLATE = """
             </div>
             {% endif %}
 
-            <h5 class="text-light mb-3">ราย่องวดหวยทั้งหมด</h5>
+            <h5 class="text-light mb-3">รายการงวดหวยทั้งหมด</h5>
             <div class="list-group">
                 {% for camp in campaigns %}
-                    <a href="/buy?user={{ username }}&draw={{ camp[0] }} งวด {{ camp[1] }}" class="list-group-item list-group-item-action list-group-item-dark py-3 mb-2 text-center fs-5 fw-bold text-warning border border-light">
-                        🎯 {{ camp[0] }} งวดวันที่ {{ camp[1] }}
-                    </a>
+                    <div class="list-group-item list-group-item-dark py-3 mb-2 d-flex justify-content-between align-items-center border border-light">
+                        <div>
+                            <a href="/buy?user={{ username }}&draw={{ camp[0] }} งวด {{ camp[1] }}" class="text-warning text-decoration-none fs-5 fw-bold">
+                                🎯 {{ camp[0] }} งวดวันที่ {{ camp[1] }}
+                            </a>
+                            <div class="small text-muted mt-1">สถานะ: <span class="badge {% if camp[2] == 'Active' %}bg-success{% else %}bg-danger{% endif %}">{{ camp[2] }}</span></div>
+                        </div>
+                        {% if role == 'Admin' %}
+                        <div>
+                            <a href="/toggle-campaign?id={{ camp[3] }}&user={{ username }}" class="btn btn-outline-light btn-sm">สลับเปิด/ปิด</a>
+                        </div>
+                        {% endif %}
+                    </div>
                 {% else %}
                     <div class="text-center text-white py-4">ยังไม่มีงวดหวยในฐานข้อมูล</div>
                 {% endfor %}
@@ -203,33 +213,45 @@ BUY_CONTENT = """
             });
         </script>
 
+        <!-- รายการร่างแสดงรายละเอียดครบถ้วนก่อนยืนยัน -->
         <div class="card shadow p-4 mb-4">
-            <h4 class="text-primary mb-3">📋 1. รายการร่าง (รอยืนยัน)</h4>
+            <h4 class="text-primary mb-3">📋 1. รายการร่าง (รอยืนยันโพย)</h4>
             <div class="table-responsive">
                 <table class="table table-striped table-bordered text-center align-middle">
                     <thead class="table-dark">
-                        <tr><th>เลข</th><th>บน / ตรง</th><th>ล่าง / โต๊ด</th><th>สถานะเลขอั้น</th></tr>
+                        <tr><th>เลข</th><th>ประเภท</th><th>ยอดซื้อ</th><th>อัตราจ่าย</th><th>ส่วนลด (%)</th><th>ยอดสุทธิ</th><th>สถานะอั้น</th></tr>
                     </thead>
                     <tbody>
                         {% for d in drafts %}
                         <tr>
                             <td><b>{{ d[1] }}</b></td>
-                            <td>{{ d[2] if d[2] and d[2] > 0 else '-' }}</td>
-                            <td>{{ d[3] if d[3] and d[3] > 0 else '-' }}</td>
+                            <td>{{ d[5] }}</td>
+                            <td>{{ "{:,.2f}".format(d[2] or 0) }}</td>
+                            <td>{{ d[6] }}</td>
+                            <td>{{ d[7] }}%</td>
+                            <td>{{ "{:,.2f}".format(d[8] or 0) }}</td>
                             <td><span class="badge bg-danger">{{ d[4] }}</span></td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="4" class="text-muted">ยังไม่มีรายการในร่าง</td></tr>
+                        <tr><td colspan="7" class="text-muted">ยังไม่มีรายการในร่าง</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
+
             {% if drafts %}
+            <div class="card bg-light p-3 mb-3">
+                <div class="row text-center fw-bold">
+                    <div class="col">ยอดซื้อรวม: ฿{{ "{:,.2f}".format(draft_totals.sum_amt) }}</div>
+                    <div class="col text-danger">ส่วนลดรวม: ฿{{ "{:,.2f}".format(draft_totals.sum_disc) }}</div>
+                    <div class="col text-primary">ยอดสุทธิที่ต้องชำระ: ฿{{ "{:,.2f}".format(draft_totals.sum_net) }}</div>
+                </div>
+            </div>
             <form method="POST" action="/confirm-bill">
                 <input type="hidden" name="user" value="{{ username }}">
                 <input type="hidden" name="draw" value="{{ draw_date }}">
                 <input type="hidden" name="customer_info" value="{{ selected_target_raw }}">
-                <button type="submit" class="btn btn-primary btn-lg w-100 fw-bold">✅ ยืนยันโพยเข้าระบบ</button>
+                <button type="submit" class="btn btn-primary btn-lg w-100 fw-bold">✅ ยืนยันโพยและบันทึกบิลเข้าระบบ</button>
             </form>
             {% endif %}
         </div>
@@ -239,15 +261,15 @@ BUY_CONTENT = """
             <div class="table-responsive">
                 <table class="table table-striped table-bordered text-center align-middle">
                     <thead class="table-success">
-                        <tr><th>เลขที่บิล</th><th>เวลา</th><th>เลข</th><th>ยอดซื้อ</th><th>สถานะ</th></tr>
+                        <tr><th>เลขที่บิล</th><th>เวลา</th><th>เลข</th><th>ประเภท</th><th>ยอดซื้อ</th><th>สุทธิ</th><th>สถานะ</th></tr>
                     </thead>
                     <tbody>
                         {% for s in saved_bills %}
                         <tr>
-                            <td>{{ s[0] }}</td><td>{{ s[1] }}</td><td><b>{{ s[2] }}</b></td><td>{{ "{:,.2f}".format(s[3] or 0) }}</td><td>{{ s[4] }}</td>
+                            <td><code>{{ s[0] }}</code></td><td>{{ s[1] }}</td><td><b>{{ s[2] }}</b></td><td>{{ s[3] }}</td><td>{{ "{:,.2f}".format(s[4] or 0) }}</td><td>{{ "{:,.2f}".format(s[6] or 0) }}</td><td>{{ s[5] }}</td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="5" class="text-muted">ยังไม่มีประวัติบิลในงวดนี้</td></tr>
+                        <tr><td colspan="7" class="text-muted">ยังไม่มีประวัติบิลในงวดนี้</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -293,6 +315,34 @@ DASHBOARD_CONTENT = """
                 </tr>
                 {% else %}
                 <tr><td colspan="4" class="text-muted">ยังไม่มีรายการซื้อในงวดนี้</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+"""
+
+REPORTS_CONTENT = """
+<div class="card shadow p-4">
+    <h2 class="text-primary mb-4">📈 รายงานสรุปยอดขายและสถิติต่างๆ</h2>
+    <div class="row text-center mb-4">
+        <div class="col-md-4 mb-2"><div class="p-3 bg-light border rounded"><h5>ยอดขายรวมทั้งสิ้น</h5><h3 class="text-dark">฿{{ "{:,.2f}".format(rep_total_sales) }}</h3></div></div>
+        <div class="col-md-4 mb-2"><div class="p-3 bg-light border rounded"><h5>ส่วนลดรวม</h5><h3 class="text-danger">฿{{ "{:,.2f}".format(rep_total_disc) }}</h3></div></div>
+        <div class="col-md-4 mb-2"><div class="p-3 bg-light border rounded"><h5>ยอดสุทธิหลังหักส่วนลด</h5><h3 class="text-primary">฿{{ "{:,.2f}".format(rep_total_net) }}</h3></div></div>
+    </div>
+    <h4 class="mb-3">สรุปยอดขายแยกตามรายชื่อลูกค้า</h4>
+    <div class="table-responsive">
+        <table class="table table-striped table-bordered text-center align-middle">
+            <thead class="table-dark">
+                <tr><th>ชื่อลูกค้า / สายงาน</th><th>จำนวนบิล</th><th>ยอดซื้อรวม</th><th>ส่วนลด</th><th>ยอดสุทธิ</th></tr>
+            </thead>
+            <tbody>
+                {% for c in rep_customers %}
+                <tr>
+                    <td><b>{{ c[0] }}</b></td><td>{{ c[1] }}</td><td>{{ "{:,.2f}".format(c[2] or 0) }}</td><td>{{ "{:,.2f}".format(c[3] or 0) }}</td><td class="text-success fw-bold">{{ "{:,.2f}".format(c[4] or 0) }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-muted">ยังไม่มีข้อมูลยอดขายในงวดนี้</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -584,7 +634,7 @@ def campaigns_page(user: str):
         user_res = c.fetchone()
         role = user_res[0] if user_res else "Member"
 
-        c.execute("SELECT lotto_name, draw_date FROM LotteryCampaigns ORDER BY id DESC")
+        c.execute("SELECT lotto_name, draw_date, status, id FROM LotteryCampaigns ORDER BY id DESC")
         campaigns = c.fetchall()
         conn.close()
         return Template(CAMPAIGN_TEMPLATE).render(username=user, role=role, campaigns=campaigns)
@@ -598,6 +648,21 @@ def create_campaign(user: str = Form(...), lotto_name: str = Form(...), draw_dat
         c = conn.cursor()
         c.execute("INSERT INTO LotteryCampaigns (lotto_name, draw_date, status) VALUES (%s, %s, 'Active')", (lotto_name, draw_date))
         conn.commit()
+        conn.close()
+    except: pass
+    return RedirectResponse(url=f"/campaigns?user={user}", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.get("/toggle-campaign")
+def toggle_campaign(id: int, user: str):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT status FROM LotteryCampaigns WHERE id=%s", (id,))
+        curr = c.fetchone()
+        if curr:
+            new_status = "Closed" if curr[0] == "Active" else "Active"
+            c.execute("UPDATE LotteryCampaigns SET status=%s WHERE id=%s", (new_status, id))
+            conn.commit()
         conn.close()
     except: pass
     return RedirectResponse(url=f"/campaigns?user={user}", status_code=status.HTTP_303_SEE_OTHER)
@@ -632,10 +697,17 @@ def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
             selected_c_id = int(c_id)
 
         drafts, saved_bills = [], []
+        sum_amt, sum_disc, sum_net = 0.0, 0.0, 0.0
+        
         if c_id:
-            c.execute("SELECT id, num, amt_teng, amt_tod, type FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
-            drafts = c.fetchall()
-            c.execute("SELECT bill_no, timestamp, num, amount, status FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) AND username=%s AND customer_id=%s AND customer_type=%s ORDER BY id DESC LIMIT 20", (draw, f"%{draw}%", user, c_id, c_type))
+            c.execute("SELECT id, num, amount, status, type, payout_rate, discount, net FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
+            for row in c.fetchall():
+                drafts.append(row)
+                sum_amt += float(row[2] or 0)
+                sum_disc += float(row[6] or 0)
+                sum_net += float(row[7] or 0)
+
+            c.execute("SELECT bill_no, timestamp, num, type, amount, status, net FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) AND username=%s AND customer_id=%s AND customer_type=%s ORDER BY id DESC LIMIT 20", (draw, f"%{draw}%", user, c_id, c_type))
             saved_bills = c.fetchall()
 
         conn.close()
@@ -643,8 +715,8 @@ def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
 
         content = Template(BUY_CONTENT).render(
             username=user, draw_date=draw, customers=all_targets, selected_target_raw=selected, 
-            selected_c_id=selected_c_id, drafts=drafts, saved_bills=saved_bills,
-            block_closed=b_closed, block_3d=b_3d, block_2d=b_2d
+            selected_c_id=selected_c_id, drafts=drafts, draft_totals={"sum_amt": sum_amt, "sum_disc": sum_disc, "sum_net": sum_net},
+            saved_bills=saved_bills, block_closed=b_closed, block_3d=b_3d, block_2d=b_2d
         )
         return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content, msg=msg)
     except Exception as e:
@@ -664,6 +736,18 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
     try:
         conn = connect_db()
         c = conn.cursor()
+        
+        # ดึงอัตราจ่ายและส่วนลดของลูกค้าคนนี้
+        pay_3d, pay_3tod, pay_2d, disc_total = 500.0, 100.0, 90.0, 0.0
+        if c_type == 'Customer':
+            c.execute("SELECT pay_3d, pay_3tod, pay_2d, disc_total FROM Customers WHERE id=%s", (c_id,))
+            res = c.fetchone()
+            if res:
+                pay_3d = float(res[0] or 500)
+                pay_3tod = float(res[1] or 100)
+                pay_2d = float(res[2] or 90)
+                disc_total = float(res[3] or 0)
+
         hold_nums = []
         for block in blocks:
             if not block: continue
@@ -680,11 +764,27 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
                 
                 for n in hold_nums:
                     if len(n) == 3:
-                        if top > 0: c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type) VALUES (%s,%s,%s,%s,%s,%s)", (user, c_id, c_type, n, top, "3ตัวตรง"))
-                        if bot > 0: c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_tod, type) VALUES (%s,%s,%s,%s,%s,%s)", (user, c_id, c_type, n, bot, "3ตัวโต๊ด"))
+                        if top > 0:
+                            disc_amt = top * (disc_total / 100.0)
+                            net_amt = top - disc_amt
+                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amount, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                                      (user, c_id, c_type, n, top, "3ตัวตรง", pay_3d, disc_amt, net_amt, "ปกติ"))
+                        if bot > 0:
+                            disc_amt = bot * (disc_total / 100.0)
+                            net_amt = bot - disc_amt
+                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amount, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                                      (user, c_id, c_type, n, bot, "3ตัวโต๊ด", pay_3tod, disc_amt, net_amt, "ปกติ"))
                     elif len(n) == 2:
-                        if top > 0: c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type) VALUES (%s,%s,%s,%s,%s,%s)", (user, c_id, c_type, n, top, "2ตัวบน"))
-                        if bot > 0: c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_tod, type) VALUES (%s,%s,%s,%s,%s,%s)", (user, c_id, c_type, n, bot, "2ตัวล่าง"))
+                        if top > 0:
+                            disc_amt = top * (disc_total / 100.0)
+                            net_amt = top - disc_amt
+                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amount, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                                      (user, c_id, c_type, n, top, "2ตัวบน", pay_2d, disc_amt, net_amt, "ปกติ"))
+                        if bot > 0:
+                            disc_amt = bot * (disc_total / 100.0)
+                            net_amt = bot - disc_amt
+                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amount, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                                      (user, c_id, c_type, n, bot, "2ตัวล่าง", pay_2d, disc_amt, net_amt, "ปกติ"))
                 hold_nums = []
             else:
                 hold_nums.append(block.strip())
@@ -701,19 +801,19 @@ def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: st
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("SELECT num, type, amt_teng, amt_tod FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
+        c.execute("SELECT num, type, amount, payout_rate, discount, net, status FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
         drafts = c.fetchall()
         if drafts:
-            bill_no = f"B-{datetime.now().strftime('%H%M%S')}"
+            bill_no = f"BILL-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:21]}-{c_id}"
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            for n, t_type, a1, a2 in drafts:
-                amt = float(a1 or 0) if float(a1 or 0) > 0 else float(a2 or 0)
+            for n, t_type, amt, rate, disc, net, status_val in drafts:
                 c.execute("INSERT INTO Transactions (draw_date, timestamp, username, customer_id, customer_name, customer_type, bill_no, num, type, amount, status, discount, net, payout_rate) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
-                          (draw, ts, user, int(c_id), c_name, c_type, bill_no, n, t_type, amt, "ปกติ", 0.0, amt, 0.0))
+                          (draw, ts, user, int(c_id), c_name, c_type, bill_no, n, t_type, amt, status_val, disc, net, rate))
             c.execute("DELETE FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
             conn.commit()
         conn.close()
-    except: pass
+    except Exception as e:
+        print("Confirm Error:", e)
     return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={customer_info}&msg=บันทึกบิลสำเร็จ!", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -736,6 +836,29 @@ def dashboard_page(user: str, draw: str):
         conn.close()
 
         content = Template(DASHBOARD_CONTENT).render(tot_2d=tot_2d, tot_3d=tot_3d, dash_rows=dash_rows)
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@app.get("/reports", response_class=HTMLResponse)
+def reports_page(user: str, draw: str):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role = c.fetchone()[0]
+
+        c.execute("SELECT SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
+        res = c.fetchone()
+        rep_total_sales = float(res[0] or 0)
+        rep_total_disc = float(res[1] or 0)
+        rep_total_net = float(res[2] or 0)
+
+        c.execute("SELECT customer_name, COUNT(DISTINCT bill_no), SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY customer_name", (draw, f"%{draw}%"))
+        rep_customers = c.fetchall()
+        conn.close()
+
+        content = Template(REPORTS_CONTENT).render(rep_total_sales=rep_total_sales, rep_total_disc=rep_total_disc, rep_total_net=rep_total_net, rep_customers=rep_customers)
         return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
     except Exception as e:
         return f"Error: {str(e)}"
@@ -779,19 +902,20 @@ def results_page(user: str, draw: str):
         winners = []
         total_payout = 0.0
         if prize_1 and bottom_2:
-            c.execute("SELECT customer_name, num, type, amount FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
+            c.execute("SELECT customer_name, num, type, amount, payout_rate FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
             txs = c.fetchall()
-            for cname, num, ttype, amt in txs:
+            for cname, num, ttype, amt, rate in txs:
                 payout = 0.0
                 amt_val = float(amt or 0)
+                rate_val = float(rate or 0)
                 if ttype == "3ตัวตรง" and num == prize_1:
-                    payout = amt_val * 500
+                    payout = amt_val * rate_val
                 elif ttype == "3ตัวโต๊ด" and sorted(num) == sorted(prize_1) and num != prize_1:
-                    payout = amt_val * 100
+                    payout = amt_val * rate_val
                 elif ttype == "2ตัวบน" and num == prize_1[-2:]:
-                    payout = amt_val * 90
+                    payout = amt_val * rate_val
                 elif ttype == "2ตัวล่าง" and num == bottom_2:
-                    payout = amt_val * 90
+                    payout = amt_val * rate_val
                 
                 if payout > 0:
                     winners.append((cname, num, ttype, amt_val, payout))
