@@ -7,13 +7,15 @@ import itertools
 
 app = FastAPI(title="Lotto ERP Full Cloud System")
 
-# ⚠️️ อย่าลืมเปลี่ยน [YOUR-PASSWORD] เป็นรหัสผ่านฐานข้อมูล Supabase ของคุณ
+# ⚠ อย่าลืมเปลี่ยน [YOUR-PASSWORD] เป็นรหัสผ่านฐานข้อมูล Supabase ของคุณ
 DB_URI = "postgresql://postgres.mpyswshlrxwpirzdexrn:Clublifekorat3888@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres"
 
 def connect_db():
     return psycopg2.connect(DB_URI)
 
-# ================= HTML Templates (ระบบเว็บทั้งหมด) =================
+CURRENT_DRAW = "งวดประจำวันที่ 16 ตุลาคม 2026"
+
+# ================= HTML Templates (ระบบเว็บทั้งหมดพร้อมแถบงวดและนาฬิกา) =================
 
 LAYOUT = """
 <!DOCTYPE html>
@@ -23,21 +25,48 @@ LAYOUT = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lotto ERP Cloud</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script>
+        function updateClock() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+            const day = String(now.getDate()).padStart(2, '0');
+            const month = String(now.getMonth() + 1).padStart(2, '0');
+            const year = now.getFullYear() + 543; // แปลงเป็นปี พ.ศ. เพื่อความคุ้นชิน
+            document.getElementById('live-clock').innerText = `🕒 ${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
+        }
+        setInterval(updateClock, 1000);
+        window.onload = updateClock;
+    </script>
 </head>
 <body class="bg-light">
+    <!-- Navbar หลัก -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark px-3">
         <a class="navbar-brand fw-bold text-warning" href="/buy?user={{ username }}">☁️ Lotto ERP</a>
-        <div class="collapse navbar-collapse">
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
             <ul class="navbar-nav me-auto">
                 <li class="nav-item"><a class="nav-link" href="/dashboard?user={{ username }}">📊 แดชบอร์ด</a></li>
                 <li class="nav-item"><a class="nav-link" href="/buy?user={{ username }}">🛒 บันทึกโพย</a></li>
                 <li class="nav-item"><a class="nav-link" href="/block?user={{ username }}">🚫 จัดการเลขอั้น</a></li>
                 <li class="nav-item"><a class="nav-link" href="/customers?user={{ username }}">👥 จัดการลูกค้า</a></li>
             </ul>
-            <span class="text-light me-3">ผู้ใช้: <b>{{ username }}</b></span>
-            <a href="/logout" class="btn btn-outline-danger btn-sm">ออกจากระบบ</a>
+            <div class="d-flex align-items-center">
+                <span id="live-clock" class="text-info fw-bold me-3 font-monospace">🕒 กำลังโหลดเวลา...</span>
+                <span class="text-light me-3">ผู้ใช้: <b>{{ username }}</b></span>
+                <a href="/logout" class="btn btn-outline-danger btn-sm">ออกจากระบบ</a>
+            </div>
         </div>
     </nav>
+
+    <!-- แถบแสดงงวดหวยปัจจุบัน (ปรากฏทุกหน้า) -->
+    <div class="bg-warning text-dark text-center py-2 fw-bold shadow-sm" style="font-size: 1.1rem;">
+        📌 กำลังปฏิบัติงานในงวด: <span class="text-danger text-decoration-underline">{{ draw_date }}</span>
+    </div>
+
     <div class="container my-4">
         {% if msg %}
             <div class="alert alert-success text-center fw-bold">{{ msg }}</div>
@@ -47,6 +76,8 @@ LAYOUT = """
         {% endif %}
         {{ content | safe }}
     </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """
@@ -91,7 +122,7 @@ BUY_CONTENT = """
                 <input type="hidden" name="user" value="{{ username }}">
                 <div class="mb-3">
                     <label class="form-label fw-bold">เลือกลูกค้า / สายงาน:</label>
-                    <select name="customer_info" class="form-select" onchange="this.form.submit()">
+                    <select name="customer_info" class="form-select form-select-lg" onchange="this.form.submit()">
                         {% for c in customers %}
                             <option value="{{ c[0] }}|{{ c[1] }}|{{ c[2] }}" {% if selected_c_id and selected_c_id|string == c[0]|string %}selected{% endif %}>{{ c[1] }} ({{ c[2] }})</option>
                         {% endfor %}
@@ -114,23 +145,25 @@ BUY_CONTENT = """
         <!-- รายการร่าง -->
         <div class="card shadow p-4 mb-4">
             <h4 class="text-primary mb-3">📋 1. รายการร่าง (รอยืนยัน)</h4>
-            <table class="table table-striped table-bordered text-center">
-                <thead class="table-dark">
-                    <tr><th>เลข</th><th>บน / ตรง</th><th>ล่าง / โต๊ด</th><th>สถานะเลขอั้น</th></tr>
-                </thead>
-                <tbody>
-                    {% for d in drafts %}
-                    <tr>
-                        <td>{{ d[1] }}</td>
-                        <td>{{ d[2] if d[2] > 0 else '-' }}</td>
-                        <td>{{ d[3] if d[3] > 0 else '-' }}</td>
-                        <td><span class="badge bg-danger">{{ d[4] }}</span></td>
-                    </tr>
-                    {% else %}
-                    <tr><td colspan="4" class="text-muted">ยังไม่มีรายการในร่าง</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+            <div class="table-responsive">
+                <table class="table table-striped table-bordered text-center align-middle">
+                    <thead class="table-dark">
+                        <tr><th>เลข</th><th>บน / ตรง</th><th>ล่าง / โต๊ด</th><th>สถานะเลขอั้น</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for d in drafts %}
+                        <tr>
+                            <td><b>{{ d[1] }}</b></td>
+                            <td>{{ d[2] if d[2] > 0 else '-' }}</td>
+                            <td>{{ d[3] if d[3] > 0 else '-' }}</td>
+                            <td><span class="badge bg-danger">{{ d[4] }}</span></td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-muted">ยังไม่มีรายการในร่าง</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
             {% if drafts %}
             <form method="POST" action="/confirm-bill">
                 <input type="hidden" name="user" value="{{ username }}">
@@ -143,26 +176,28 @@ BUY_CONTENT = """
         <!-- บิลล่าสุด -->
         <div class="card shadow p-4">
             <h4 class="text-success mb-3">📜 2. บิลล่าสุดของลูกค้ารายนี้</h4>
-            <table class="table table-striped table-bordered text-center">
-                <thead class="table-success">
-                    <tr><th>เลขที่บิล</th><th>เวลา</th><th>เลข</th><th>ยอดซื้อ</th><th>สถานะ</th></tr>
-                </thead>
-                <tbody>
-                    {% for s in saved_bills %}
-                    <tr>
-                        <td>{{ s[0] }}</td><td>{{ s[1] }}</td><td>{{ s[2] }}</td><td>{{ "{:,.2f}".format(s[3]) }}</td><td>{{ s[4] }}</td>
-                    </tr>
-                    {% else %}
-                    <tr><td colspan="5" class="text-muted">ยังไม่มีประวัติบิลในงวดนี้</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+            <div class="table-responsive">
+                <table class="table table-striped table-bordered text-center align-middle">
+                    <thead class="table-success">
+                        <tr><th>เลขที่บิล</th><th>เวลา</th><th>เลข</th><th>ยอดซื้อ</th><th>สถานะ</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for s in saved_bills %}
+                        <tr>
+                            <td>{{ s[0] }}</td><td>{{ s[1] }}</td><td><b>{{ s[2] }}</b></td><td>{{ "{:,.2f}".format(s[3]) }}</td><td>{{ s[4] }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="text-muted">ยังไม่มีประวัติบิลในงวดนี้</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
     <!-- ฝั่งขวา: แสดงเลขอั้นจากฐานข้อมูล -->
     <div class="col-lg-4">
-        <div class="card shadow p-3 bg-white">
+        <div class="card shadow p-3 bg-white mb-4">
             <h5 class="text-danger fw-bold mb-3">🚫 เลขอั้น (งวดปัจจุบัน)</h5>
             
             <label class="fw-bold text-dark mb-1">เลขอั้นปิดรับ:</label>
@@ -182,28 +217,30 @@ DASHBOARD_CONTENT = """
 <div class="card shadow p-4">
     <h2 class="text-primary mb-4">📊 สรุปยอดขายรวมประจำงวด</h2>
     <div class="row text-center mb-4">
-        <div class="col-md-6">
+        <div class="col-md-6 mb-3">
             <div class="p-3 bg-warning text-dark rounded shadow fw-bold fs-4">ยอดรวม 2 ตัว: ฿{{ "{:,.2f}".format(tot_2d) }}</div>
         </div>
-        <div class="col-md-6">
+        <div class="col-md-6 mb-3">
             <div class="p-3 bg-warning text-dark rounded shadow fw-bold fs-4">ยอดรวม 3 ตัว: ฿{{ "{:,.2f}".format(tot_3d) }}</div>
         </div>
     </div>
     <h4 class="mb-3">รายละเอียดหมายเลขที่มียอดซื้อ</h4>
-    <table class="table table-striped table-bordered text-center">
-        <thead class="table-dark">
-            <tr><th>ประเภท</th><th>ตัวเลข</th><th>ยอดซื้อรวม</th><th>ผู้ซื้อ</th></tr>
-        </thead>
-        <tbody>
-            {% for r in dash_rows %}
-            <tr>
-                <td>{{ r[0] }}</td><td><b>{{ r[1] }}</b></td><td>{{ "{:,.2f}".format(r[2]) }}</td><td>{{ r[3] }}</td>
-            </tr>
-            {% else %}
-            <tr><td colspan="4" class="text-muted">ยังไม่มีรายการซื้อในงวดนี้</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="table-responsive">
+        <table class="table table-striped table-bordered text-center align-middle">
+            <thead class="table-dark">
+                <tr><th>ประเภท</th><th>ตัวเลข</th><th>ยอดซื้อรวม</th><th>ผู้ซื้อ</th></tr>
+            </thead>
+            <tbody>
+                {% for r in dash_rows %}
+                <tr>
+                    <td>{{ r[0] }}</td><td><b>{{ r[1] }}</b></td><td>{{ "{:,.2f}".format(r[2]) }}</td><td>{{ r[3] }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="text-muted">ยังไม่มีรายการซื้อในงวดนี้</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
 """
 
@@ -235,27 +272,29 @@ BLOCK_CONTENT = """
     </form>
     
     <h4 class="mb-3">รายการเลขอั้นในระบบ</h4>
-    <table class="table table-striped table-bordered text-center">
-        <thead class="table-dark">
-            <tr><th>เลข (อั้น)</th><th>ประเภท</th><th>สถานะ</th><th>จัดการ</th></tr>
-        </thead>
-        <tbody>
-            {% for b in blocks %}
-            <tr>
-                <td>{{ b[1] }}</td><td>{{ b[2] }}</td><td><span class="badge bg-danger">{{ b[3] }}</span></td>
-                <td><a href="/delete-block?id={{ b[0] }}&user={{ username }}" class="btn btn-outline-danger btn-sm">ลบ</a></td>
-            </tr>
-            {% else %}
-            <tr><td colspan="4" class="text-muted">ยังไม่มีเลขอั้นในงวดนี้</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="table-responsive">
+        <table class="table table-striped table-bordered text-center align-middle">
+            <thead class="table-dark">
+                <tr><th>เลข (อั้น)</th><th>ประเภท</th><th>สถานะ</th><th>จัดการ</th></tr>
+            </thead>
+            <tbody>
+                {% for b in blocks %}
+                <tr>
+                    <td><b>{{ b[1] }}</b></td><td>{{ b[2] }}</td><td><span class="badge bg-danger">{{ b[3] }}</span></td>
+                    <td><a href="/delete-block?id={{ b[0] }}&user={{ username }}" class="btn btn-outline-danger btn-sm">ลบ</a></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="text-muted">ยังไม่มีเลขอั้นในงวดนี้</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
 """
 
 CUSTOMER_CONTENT = """
 <div class="row">
-    <div class="col-md-4">
+    <div class="col-md-4 mb-4">
         <div class="card shadow p-4">
             <h4 class="text-success mb-3">➕ เพิ่มลูกค้ารายใหม่</h4>
             <form method="POST" action="/save-customer">
@@ -282,26 +321,27 @@ CUSTOMER_CONTENT = """
     <div class="col-md-8">
         <div class="card shadow p-4">
             <h4 class="text-primary mb-3">👥 รายชื่อลูกค้าของคุณ</h4>
-            <table class="table table-striped table-bordered text-center">
-                <thead class="table-dark">
-                    <tr><th>ID</th><th>ชื่อลูกค้า</th><th>ส่วนลด (%)</th><th>จ่าย 3 ตรง</th><th>จ่าย 3 โต๊ด</th><th>จ่าย 2 ตัว</th></tr>
-                </thead>
-                <tbody>
-                    {% for c in customers_list %}
-                    <tr>
-                        <td>{{ c[0] }}</td><td>{{ c[1] }}</td><td>{{ c[2] }}</td><td>{{ c[3] }}</td><td>{{ c[4] }}</td><td>{{ c[5] }}</td>
-                    </tr>
-                    {% else %}
-                    <tr><td colspan="6" class="text-muted">ยังไม่มีรายชื่อลูกค้า</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+            <div class="table-responsive">
+                <table class="table table-striped table-bordered text-center align-middle">
+                    <thead class="table-dark">
+                        <tr><th>ID</th><th>ชื่อลูกค้า</th><th>ส่วนลด (%)</th><th>จ่าย 3 ตรง</th><th>จ่าย 3 โต๊ด</th><th>จ่าย 2 ตัว</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for c in customers_list %}
+                        <tr>
+                            <td>{{ c[0] }}</td><td><b>{{ c[1] }}</b></td><td>{{ c[2] }}</td><td>{{ c[3] }}</td><td>{{ c[4] }}</td><td>{{ c[5] }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="6" class="text-muted">ยังไม่มีรายชื่อลูกค้า</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>
 """
 
-# ================= helper สำหรับดึงเลขอั้นแสดงผลดิบ =================
 def get_blocked_display_data(draw_date):
     try:
         conn = connect_db()
@@ -318,9 +358,7 @@ def get_blocked_display_data(draw_date):
     except:
         return "", "", ""
 
-# ================= Routes (เส้นทางเว็บไซต์หลัก) =================
-
-CURRENT_DRAW = "งวดประจำวันที่ 16 ตุลาคม 2026"
+# ================= Routes =================
 
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -382,7 +420,7 @@ def buy_page(user: str, selected: str = None, msg: str = None):
             selected_c_id=selected_c_id, drafts=drafts, saved_bills=saved_bills,
             block_closed=b_closed, block_3d=b_3d, block_2d=b_2d
         )
-        return Template(LAYOUT).render(username=user, content=content, msg=msg)
+        return Template(LAYOUT).render(username=user, draw_date=CURRENT_DRAW, content=content, msg=msg)
     except Exception as e:
         return f"System Error: {str(e)}"
 
@@ -475,7 +513,7 @@ def dashboard_page(user: str):
         conn.close()
 
         content = Template(DASHBOARD_CONTENT).render(tot_2d=tot_2d, tot_3d=tot_3d, dash_rows=dash_rows)
-        return Template(LAYOUT).render(username=user, content=content)
+        return Template(LAYOUT).render(username=user, draw_date=CURRENT_DRAW, content=content)
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -489,7 +527,7 @@ def block_page(user: str, msg: str = None):
         conn.close()
 
         content = Template(BLOCK_CONTENT).render(username=user, blocks=blocks)
-        return Template(LAYOUT).render(username=user, content=content, msg=msg)
+        return Template(LAYOUT).render(username=user, draw_date=CURRENT_DRAW, content=content, msg=msg)
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -532,7 +570,7 @@ def customers_page(user: str, msg: str = None):
         conn.close()
 
         content = Template(CUSTOMER_CONTENT).render(username=user, customers_list=custs_list)
-        return Template(LAYOUT).render(username=user, content=content, msg=msg)
+        return Template(LAYOUT).render(username=user, draw_date=CURRENT_DRAW, content=content, msg=msg)
     except Exception as e:
         return f"Error: {str(e)}"
 
