@@ -7,12 +7,12 @@ import itertools
 
 app = FastAPI(title="Lotto ERP Full Enterprise Cloud")
 
-DB_URI = "postgresql://postgres.mpyswshlrxwpirzdexrn:Clublifekorat3888@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres"
+DB_URI = "postgresql://postgres.mpyswshlrxwpirzdexrn:[YOUR-PASSWORD]@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres"
 
 def connect_db():
     return psycopg2.connect(DB_URI)
 
-# ตรวจสอบและสร้างตารางสนับสนุนอัตโนมัติเพื่อความสมบูรณ์ 100%
+# ตรวจสอบและสร้างตารางสนับสนุนอัตโนมัติ
 @app.on_event("startup")
 def startup_db():
     try:
@@ -109,9 +109,10 @@ LAYOUT = """
             <ul class="navbar-nav me-auto">
                 <li class="nav-item"><a class="nav-link" href="/dashboard?user={{ username }}&draw={{ draw_date }}">📊 แดชบอร์ด</a></li>
                 <li class="nav-item"><a class="nav-link" href="/buy?user={{ username }}&draw={{ draw_date }}">🛒 บันทึกโพย</a></li>
+                <li class="nav-item"><a class="nav-link" href="/excel-ledger?user={{ username }}&draw={{ draw_date }}">📑 ตารางคีย์เลข (Excel)</a></li>
                 <li class="nav-item"><a class="nav-link" href="/reports?user={{ username }}&draw={{ draw_date }}">📈 รายงานยอดขาย</a></li>
                 {% if role in ['Admin', 'Master Agent'] %}
-                <li class="nav-item"><a class="nav-link" href="/risk?user={{ username }}&draw={{ draw_date }}">⚠️ เช็คความเสี่ยง</a></li>
+                <li class="nav-item"><a class="nav-link" href="/risk?user={{ username }}&draw={{ draw_date }}">⚠️️ เช็คความเสี่ยง</a></li>
                 <li class="nav-item"><a class="nav-link" href="/results?user={{ username }}&draw={{ draw_date }}">🏆 ออกผลรางวัล</a></li>
                 {% endif %}
                 <li class="nav-item"><a class="nav-link" href="/block?user={{ username }}&draw={{ draw_date }}">🚫 จัดการเลขอั้น</a></li>
@@ -121,6 +122,7 @@ LAYOUT = """
             <div class="d-flex align-items-center">
                 <span id="live-clock" class="text-info fw-bold me-3 font-monospace">🕒 กำลังโหลด...</span>
                 <span class="text-light me-3">ผู้ใช้: <b>{{ username }} ({{ role }})</b></span>
+                <a href="/password?user={{ username }}&draw={{ draw_date }}" class="btn btn-outline-info btn-sm me-2">🔑 เปลี่ยนรหัส</a>
                 <a href="/campaigns?user={{ username }}" class="btn btn-warning btn-sm me-2 fw-bold text-dark">📌 เปลี่ยนงวด</a>
                 <a href="/logout" class="btn btn-outline-danger btn-sm">ออกจากระบบ</a>
             </div>
@@ -275,7 +277,6 @@ BUY_CONTENT = """
             });
         </script>
 
-        <!-- รายการร่างแสดงรายละเอียดครบถ้วนก่อนยืนยัน -->
         <div class="card shadow p-4 mb-4">
             <h4 class="text-primary mb-3 fw-bold">📋 1. รายการร่าง (รอยืนยันโพย)</h4>
             <div class="table-responsive">
@@ -349,6 +350,52 @@ BUY_CONTENT = """
             <label class="fw-bold text-dark mb-1">เลขอั้น 2 ตัว (จ่ายครึ่ง):</label>
             <textarea class="form-control bg-light text-dark" rows="4" readonly>{{ block_2d }}</textarea>
         </div>
+    </div>
+</div>
+"""
+
+EXCEL_LEDGER_CONTENT = """
+<div class="card shadow p-4">
+    <h2 class="text-primary mb-4 fw-bold">📑 ตารางสรุปการคีย์เลขเข้าระบบ (Excel Ledger View)</h2>
+    <div class="table-responsive">
+        <table class="table table-striped table-bordered table-hover text-center align-middle" style="font-size: 0.95rem;">
+            <thead class="table-dark">
+                <tr>
+                    <th>ลำดับ</th>
+                    <th>วัน-เวลาที่บันทึก</th>
+                    <th>เลขที่บิล</th>
+                    <th>ผู้ซื้อ / ลูกค้า</th>
+                    <th>ผู้บันทึกโพย</th>
+                    <th>ประเภท</th>
+                    <th>หมายเลข</th>
+                    <th>ยอดซื้อ</th>
+                    <th>อัตราจ่าย</th>
+                    <th>ส่วนลด</th>
+                    <th>ยอดสุทธิ</th>
+                    <th>สถานะ</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in ledger_rows %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td><small>{{ r[1] }}</small></td>
+                    <td><code>{{ r[0] }}</code></td>
+                    <td><b>{{ r[2] }}</b></td>
+                    <td><span class="badge bg-secondary">{{ r[3] }}</span></td>
+                    <td>{{ r[4] }}</td>
+                    <td><b class="text-primary fs-6">{{ r[5] }}</b></td>
+                    <td>{{ "{:,.2f}".format(r[6] or 0) }}</td>
+                    <td>{{ r[7] }}</td>
+                    <td class="text-danger">{{ "{:,.2f}".format(r[8] or 0) }}</td>
+                    <td class="text-success fw-bold">{{ "{:,.2f}".format(r[9] or 0) }}</td>
+                    <td><span class="badge bg-success">{{ r[10] }}</span></td>
+                </tr>
+                {% else %}
+                <tr><td colspan="12" class="text-muted py-4">ยังไม่มีรายการคีย์โพยเข้าระบบในงวดนี้</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </div>
 </div>
 """
@@ -648,6 +695,33 @@ USERS_CONTENT = """
 </div>
 """
 
+PASSWORD_TEMPLATE = """
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card shadow p-4 border">
+            <h3 class="text-primary mb-3 fw-bold">🔑 เปลี่ยนรหัสผ่านส่วนตัว</h3>
+            <form method="POST" action="/update-password">
+                <input type="hidden" name="user" value="{{ username }}">
+                <input type="hidden" name="draw" value="{{ draw_date }}">
+                <div class="mb-3">
+                    <label class="form-label fw-bold text-dark">รหัสผ่านปัจจุบัน:</label>
+                    <input type="password" name="old_password" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold text-dark">รหัสผ่านใหม่:</label>
+                    <input type="password" name="new_password" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold text-dark">ยืนยันรหัสผ่านใหม่:</label>
+                    <input type="password" name="confirm_password" class="form-control" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100 fw-bold py-2">💾 บันทึกรหัสผ่านใหม่</button>
+            </form>
+        </div>
+    </div>
+</div>
+"""
+
 def get_blocked_display_data(draw_date):
     try:
         conn = connect_db()
@@ -877,6 +951,24 @@ def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: st
         print("Confirm Error:", e)
     return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={customer_info}&msg=บันทึกบิลสำเร็จ!", status_code=status.HTTP_303_SEE_OTHER)
 
+@app.get("/excel-ledger", response_class=HTMLResponse)
+def excel_ledger_page(user: str, draw: str):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role = c.fetchone()[0]
+
+        # ดึงประวัติธุรกรรมเรียงจากล่าสุด (id DESC หรือ timestamp DESC)
+        c.execute("SELECT bill_no, timestamp, customer_name, username, type, num, amount, payout_rate, discount, net, status FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) ORDER BY id DESC", (draw, f"%{draw}%"))
+        ledger_rows = c.fetchall()
+        conn.close()
+
+        content = Template(EXCEL_LEDGER_CONTENT).render(ledger_rows=ledger_rows)
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard_page(user: str, draw: str):
     try:
@@ -1099,6 +1191,38 @@ def save_user_level(user: str = Form(...), draw: str = Form(...), new_username: 
         conn.close()
     except: pass
     return RedirectResponse(url=f"/users?user={user}&draw={draw}&msg=สร้างสมาชิกใหม่สำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.get("/password", response_class=HTMLResponse)
+def password_page(user: str, draw: str, msg: str = None, error: str = None):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role = c.fetchone()[0]
+        conn.close()
+        
+        content = Template(PASSWORD_TEMPLATE).render(username=user, draw_date=draw)
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content, msg=msg, error=error)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@app.post("/update-password")
+def update_password(user: str = Form(...), draw: str = Form(...), old_password: str = Form(...), new_password: str = Form(...), confirm_password: str = Form(...)):
+    if new_password != confirm_password:
+        return RedirectResponse(url=f"/password?user={user}&draw={draw}&error=รหัสผ่านใหม่ไม่ตรงกัน!", status_code=status.HTTP_303_SEE_OTHER)
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT id FROM Users WHERE username=%s AND password=%s", (user, old_password))
+        if not c.fetchone():
+            conn.close()
+            return RedirectResponse(url=f"/password?user={user}&draw={draw}&error=รหัสผ่านปัจจุบันไม่ถูกต้อง!", status_code=status.HTTP_303_SEE_OTHER)
+        c.execute("UPDATE Users SET password=%s WHERE username=%s", (new_password, user))
+        conn.commit()
+        conn.close()
+        return RedirectResponse(url=f"/password?user={user}&draw={draw}&msg=เปลี่ยนรหัสผ่านสำเร็จ!", status_code=status.HTTP_303_SEE_OTHER)
+    except Exception as e:
+        return RedirectResponse(url=f"/password?user={user}&draw={draw}&error=เกิดข้อผิดพลาด: {str(e)}", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/logout")
 def logout():
