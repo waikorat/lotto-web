@@ -12,7 +12,7 @@ DB_URI = "postgresql://postgres.mpyswshlrxwpirzdexrn:Clublifekorat3888@aws-0-ap-
 def connect_db():
     return psycopg2.connect(DB_URI)
 
-# ตรวจสอบและสร้างตารางสนับสนุนอัตโนมัติ
+# ตรวจสอบและสร้าง/อัปเดตโครงสร้างตารางและคอลัมน์อัตโนมัติป้องกัน Error 100%
 @app.on_event("startup")
 def startup_db():
     try:
@@ -42,6 +42,14 @@ def startup_db():
                 status TEXT DEFAULT 'ปกติ'
             );
         """)
+        # ตรวจสอบเผื่อกรณีตาราง TempDraft มีอยู่แล้วแต่ยังขาดคอลัมน์ status
+        c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ปกติ';")
+        c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS amt_teng NUMERIC DEFAULT 0;")
+        c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS amt_tod NUMERIC DEFAULT 0;")
+        c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS payout_rate NUMERIC DEFAULT 0;")
+        c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS discount NUMERIC DEFAULT 0;")
+        c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS net NUMERIC DEFAULT 0;")
+
         c.execute("""
             CREATE TABLE IF NOT EXISTS Transactions (
                 id SERIAL PRIMARY KEY,
@@ -74,7 +82,7 @@ def startup_db():
     except Exception as e:
         print("Startup DB Init Warning:", e)
 
-# ================= HTML Layout & Templates =================
+# ================= Master Layout Template =================
 
 LAYOUT = """
 <!DOCTYPE html>
@@ -82,8 +90,23 @@ LAYOUT = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lotto ERP Cloud</title>
+    <title>Lotto ERP - ระบบบริหารจัดการหวย</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow-x: hidden; }
+        .top-navbar { background-color: #1a1a1a; color: white; padding: 8px 15px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #ffc107; }
+        .top-nav-links { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .top-nav-links a { background-color: #ffc107; color: #000; font-weight: bold; padding: 5px 12px; border-radius: 4px; text-decoration: none; font-size: 0.9rem; transition: 0.2s; }
+        .top-nav-links a:hover { background-color: #e0a800; }
+        .ticker-banner { background-color: #dc3545; color: white; text-align: center; padding: 6px; font-weight: bold; font-size: 0.95rem; }
+        .main-wrapper { display: flex; min-height: calc(100vh - 100px); }
+        .sidebar { width: 260px; background-color: #1a1a1a; color: white; border-right: 2px solid #ffc107; padding: 15px 10px; flex-shrink: 0; }
+        .user-profile-box { background-color: #2b2b2b; border: 1px solid #ffc107; border-radius: 6px; text-align: center; padding: 12px; margin-bottom: 20px; }
+        .sidebar-section-title { color: #ffc107; font-weight: bold; font-size: 0.95rem; margin-top: 15px; margin-bottom: 8px; border-bottom: 1px solid #444; padding-bottom: 4px; }
+        .sidebar-menu-item { display: block; color: #fff; text-decoration: none; padding: 6px 10px; border-radius: 4px; font-size: 0.9rem; margin-bottom: 3px; }
+        .sidebar-menu-item:hover { background-color: #333; color: #ffc107; }
+        .content-area { flex-grow: 1; background-color: #ffffff; padding: 20px; box-shadow: inset 0 0 10px rgba(0,0,0,0.05); }
+    </style>
     <script>
         function updateClock() {
             const now = new Date();
@@ -92,57 +115,71 @@ LAYOUT = """
             const seconds = String(now.getSeconds()).padStart(2, '0');
             const day = String(now.getDate()).padStart(2, '0');
             const month = String(now.getMonth() + 1).padStart(2, '0');
-            const year = now.getFullYear() + 543;
-            document.getElementById('live-clock').innerText = `🕒 ${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
+            const year = now.getFullYear();
+            document.getElementById('live-clock').innerText = `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
         }
         setInterval(updateClock, 1000);
         window.onload = updateClock;
     </script>
 </head>
-<body class="bg-light">
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark px-3 shadow">
-        <a class="navbar-brand fw-bold text-warning" href="/buy?user={{ username }}&draw={{ draw_date }}">☁️ Lotto ERP</a>
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-            <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse" id="navbarNav">
-            <ul class="navbar-nav me-auto">
-                <li class="nav-item"><a class="nav-link" href="/dashboard?user={{ username }}&draw={{ draw_date }}">📊 แดชบอร์ด</a></li>
-                <li class="nav-item"><a class="nav-link" href="/buy?user={{ username }}&draw={{ draw_date }}">🛒 บันทึกโพย</a></li>
-                <li class="nav-item"><a class="nav-link" href="/excel-ledger?user={{ username }}&draw={{ draw_date }}">📑 ตารางคีย์เลข (Excel)</a></li>
-                <li class="nav-item"><a class="nav-link" href="/reports?user={{ username }}&draw={{ draw_date }}">📈 รายงานยอดขาย</a></li>
-                {% if role in ['Admin', 'Master Agent'] %}
-                <li class="nav-item"><a class="nav-link" href="/risk?user={{ username }}&draw={{ draw_date }}">⚠️️ เช็คความเสี่ยง</a></li>
-                <li class="nav-item"><a class="nav-link" href="/results?user={{ username }}&draw={{ draw_date }}">🏆 ออกผลรางวัล</a></li>
-                {% endif %}
-                <li class="nav-item"><a class="nav-link" href="/block?user={{ username }}&draw={{ draw_date }}">🚫 จัดการเลขอั้น</a></li>
-                <li class="nav-item"><a class="nav-link" href="/customers?user={{ username }}&draw={{ draw_date }}">👥 จัดการลูกค้า</a></li>
-                <li class="nav-item"><a class="nav-link" href="/users?user={{ username }}&draw={{ draw_date }}">⚙ จัดการสมาชิก</a></li>
-            </ul>
-            <div class="d-flex align-items-center">
-                <span id="live-clock" class="text-info fw-bold me-3 font-monospace">🕒 กำลังโหลด...</span>
-                <span class="text-light me-3">ผู้ใช้: <b>{{ username }} ({{ role }})</b></span>
-                <a href="/password?user={{ username }}&draw={{ draw_date }}" class="btn btn-outline-info btn-sm me-2">🔑 เปลี่ยนรหัส</a>
-                <a href="/campaigns?user={{ username }}" class="btn btn-warning btn-sm me-2 fw-bold text-dark">📌 เปลี่ยนงวด</a>
-                <a href="/logout" class="btn btn-outline-danger btn-sm">ออกจากระบบ</a>
-            </div>
+<body>
+    <div class="top-navbar">
+        <div class="fw-bold fs-5 text-warning">
+            Lotto ERP | งวด: <span class="text-white">{{ draw_date }}</span> | User: <b>{{ username }} ({{ role }})</b>
         </div>
-    </nav>
-
-    <div class="bg-warning text-dark text-center py-2 fw-bold shadow-sm" style="font-size: 1.1rem;">
-        📌 กำลังปฏิบัติงานในงวด: <span class="text-danger text-decoration-underline">{{ draw_date }}</span>
+        <div class="top-nav-links">
+            <a href="/dashboard?user={{ username }}&draw={{ draw_date }}">📊 แดชบอร์ด</a>
+            <a href="/buy?user={{ username }}&draw={{ draw_date }}">🛒 บันทึกโพย</a>
+            <a href="/block?user={{ username }}&draw={{ draw_date }}">🚫 จัดการเลขอั้น</a>
+            <a href="/password?user={{ username }}&draw={{ draw_date }}">⚙ ตั้งค่าเริ่มต้น</a>
+            <a href="/excel-ledger?user={{ username }}&draw={{ draw_date }}">ฐานข้อมูล</a>
+            <a href="/customers?user={{ username }}&draw={{ draw_date }}">👥 จัดการลูกค้า</a>
+            <a href="/risk?user={{ username }}&draw={{ draw_date }}">⚠ ความเสี่ยง</a>
+        </div>
+        <div class="d-flex align-items-center gap-3">
+            <span id="live-clock" class="text-info fw-bold font-monospace">กำลังโหลด...</span>
+            <a href="/logout" class="btn btn-danger btn-sm fw-bold px-3">🚪 ออกจากระบบ</a>
+        </div>
     </div>
 
-    <div class="container my-4">
-        {% if msg %}
-            <div class="alert alert-success text-center fw-bold">{{ msg }}</div>
-        {% endif %}
-        {% if error %}
-            <div class="alert alert-danger text-center fw-bold">{{ error }}</div>
-        {% endif %}
-        {{ content | safe }}
+    <div class="ticker-banner">
+        📢 แถบแจ้งข้อมูลข่าวสาร: กำลังเปิดรับแทงงวด หวยรัฐบาล งวด {{ draw_date }}
     </div>
 
+    <div class="main-wrapper">
+        <div class="sidebar">
+            <div class="user-profile-box">
+                <div class="text-warning fw-bold fs-5">👤 ยินดีต้อนรับ</div>
+                <div class="text-white fw-bold fs-6 mt-1">{{ username }}</div>
+                <div class="text-info small">({{ role }})</div>
+            </div>
+
+            <div class="sidebar-section-title">จัดการผู้ใช้</div>
+            <a href="/users?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ Master</a>
+            <a href="/users?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ เอเย่นต์</a>
+            <a href="/users?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ สมาชิก</a>
+
+            <div class="sidebar-section-title">แทงหวย</div>
+            <a href="/campaigns?user={{ username }}" class="sidebar-menu-item">▶ หวยรัฐบาล</a>
+            <a href="/campaigns?user={{ username }}" class="sidebar-menu-item">▶ หวยลาว</a>
+            <a href="/campaigns?user={{ username }}" class="sidebar-menu-item">▶ หวยหุ้น</a>
+
+            <div class="sidebar-section-title">รายงาน</div>
+            <a href="/results?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ ชนะ แพ้ (รายละเอียด)</a>
+            <a href="/reports?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ เอเย่นต์</a>
+            <a href="/reports?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ สมาชิก</a>
+        </div>
+
+        <div class="content-area">
+            {% if msg %}
+                <div class="alert alert-success text-center fw-bold">{{ msg }}</div>
+            {% endif %}
+            {% if error %}
+                <div class="alert alert-danger text-center fw-bold">{{ error }}</div>
+            {% endif %}
+            {{ content | safe }}
+        </div>
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
@@ -157,9 +194,9 @@ LOGIN_TEMPLATE = """
     <title>Login - Lotto ERP Cloud</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
-<body class="bg-light d-flex align-items-center justify-content-center" style="height: 100vh;">
-    <div class="card bg-white p-4 shadow border" style="width: 380px;">
-        <h3 class="text-center text-primary mb-4 fw-bold">☁️ Lotto ERP Cloud</h3>
+<body class="bg-dark d-flex align-items-center justify-content-center" style="height: 100vh;">
+    <div class="card bg-white p-4 shadow border border-warning" style="width: 380px;">
+        <h3 class="text-center text-primary mb-4 fw-bold">☁ Lotto ERP Cloud</h3>
         {% if error %}
             <div class="alert alert-danger py-2 text-center">{{ error }}</div>
         {% endif %}
@@ -172,7 +209,7 @@ LOGIN_TEMPLATE = """
                 <label class="form-label fw-bold text-dark">รหัสผ่าน (Password)</label>
                 <input type="password" name="password" class="form-control" required>
             </div>
-            <button type="submit" class="btn btn-primary w-100 fw-bold py-2">เข้าสู่ระบบ</button>
+            <button type="submit" class="btn btn-warning w-100 fw-bold py-2 text-dark">เข้าสู่ระบบ</button>
         </form>
     </div>
 </body>
@@ -180,65 +217,48 @@ LOGIN_TEMPLATE = """
 """
 
 CAMPAIGN_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="th">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>เลือกงวดหวย - Lotto ERP</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-</head>
-<body class="bg-light">
-    <div class="container my-5" style="max-width: 700px;">
-        <div class="card bg-white p-4 shadow border">
-            <h2 class="text-center text-primary mb-4 fw-bold">📌 จัดการและเลือกงวดหวย</h2>
-            
-            {% if role == 'Admin' %}
-            <div class="card bg-light p-3 mb-4 border border-primary">
-                <h5 class="text-primary mb-3 fw-bold">➕ เปิดงวดหวยใหม่ (Admin)</h5>
-                <form method="POST" action="/create-campaign">
-                    <input type="hidden" name="user" value="{{ username }}">
-                    <div class="mb-2">
-                        <label class="form-label fw-bold text-dark">ชื่อหวย:</label>
-                        <input type="text" name="lotto_name" class="form-control" placeholder="เช่น หวยรัฐบาล, หวยลาว" required>
+<div class="container my-3" style="max-width: 800px;">
+    <div class="card bg-white p-4 shadow border">
+        <h2 class="text-center text-primary mb-4 fw-bold">📌 จัดการและเลือกงวดหวย</h2>
+        {% if role == 'Admin' %}
+        <div class="card bg-light p-3 mb-4 border border-primary">
+            <h5 class="text-primary mb-3 fw-bold">➕ เปิดงวดหวยใหม่ (Admin)</h5>
+            <form method="POST" action="/create-campaign">
+                <input type="hidden" name="user" value="{{ username }}">
+                <div class="mb-2">
+                    <label class="form-label fw-bold text-dark">ชื่อหวย:</label>
+                    <input type="text" name="lotto_name" class="form-control" placeholder="เช่น หวยรัฐบาล, หวยลาว" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold text-dark">งวดวันที่:</label>
+                    <input type="text" name="draw_date" class="form-control" placeholder="เช่น 16 ตุลาคม 2026" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100 fw-bold">เปิดงวดใหม่</button>
+            </form>
+        </div>
+        {% endif %}
+        <h5 class="text-dark mb-3 fw-bold">รายการงวดหวยทั้งหมด</h5>
+        <div class="list-group">
+            {% for camp in campaigns %}
+                <div class="list-group-item list-group-item-light py-3 mb-2 d-flex justify-content-between align-items-center border">
+                    <div>
+                        <a href="/buy?user={{ username }}&draw={{ camp[0] }} งวด {{ camp[1] }}" class="text-primary text-decoration-none fs-5 fw-bold">
+                            🎯 {{ camp[0] }} งวดวันที่ {{ camp[1] }}
+                        </a>
+                        <div class="small text-muted mt-1">สถานะ: <span class="badge {% if camp[2] == 'Active' %}bg-success{% else %}bg-danger{% endif %}">{{ camp[2] }}</span></div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold text-dark">งวดวันที่:</label>
-                        <input type="text" name="draw_date" class="form-control" placeholder="เช่น 16 ตุลาคม 2026" required>
+                    {% if role == 'Admin' %}
+                    <div>
+                        <a href="/toggle-campaign?id={{ camp[3] }}&user={{ username }}" class="btn btn-outline-dark btn-sm fw-bold">สลับเปิด/ปิด</a>
                     </div>
-                    <button type="submit" class="btn btn-primary w-100 fw-bold">เปิดงวดใหม่</button>
-                </form>
-            </div>
-            {% endif %}
-
-            <h5 class="text-dark mb-3 fw-bold">รายการงวดหวยทั้งหมด</h5>
-            <div class="list-group">
-                {% for camp in campaigns %}
-                    <div class="list-group-item list-group-item-light py-3 mb-2 d-flex justify-content-between align-items-center border">
-                        <div>
-                            <a href="/buy?user={{ username }}&draw={{ camp[0] }} งวด {{ camp[1] }}" class="text-primary text-decoration-none fs-5 fw-bold">
-                                🎯 {{ camp[0] }} งวดวันที่ {{ camp[1] }}
-                            </a>
-                            <div class="small text-muted mt-1">สถานะ: <span class="badge {% if camp[2] == 'Active' %}bg-success{% else %}bg-danger{% endif %}">{{ camp[2] }}</span></div>
-                        </div>
-                        {% if role == 'Admin' %}
-                        <div>
-                            <a href="/toggle-campaign?id={{ camp[3] }}&user={{ username }}" class="btn btn-outline-dark btn-sm fw-bold">สลับเปิด/ปิด</a>
-                        </div>
-                        {% endif %}
-                    </div>
-                {% else %}
-                    <div class="text-center text-muted py-4">ยังไม่มีงวดหวยในฐานข้อมูล</div>
-                {% endfor %}
-            </div>
-            
-            <div class="text-center mt-4">
-                <a href="/logout" class="btn btn-outline-danger btn-sm">ออกจากระบบ</a>
-            </div>
+                    {% endif %}
+                </div>
+            {% else %}
+                <div class="text-center text-muted py-4">ยังไม่มีงวดหวยในฐานข้อมูล</div>
+            {% endfor %}
         </div>
     </div>
-</body>
-</html>
+</div>
 """
 
 BUY_CONTENT = """
@@ -317,26 +337,6 @@ BUY_CONTENT = """
                 <button type="submit" class="btn btn-primary btn-lg w-100 fw-bold">✅ ยืนยันโพยและบันทึกบิลเข้าระบบ</button>
             </form>
             {% endif %}
-        </div>
-
-        <div class="card shadow p-4">
-            <h4 class="text-success mb-3 fw-bold">📜 2. บิลล่าสุดของลูกค้ารายนี้</h4>
-            <div class="table-responsive">
-                <table class="table table-striped table-bordered text-center align-middle">
-                    <thead class="table-success text-dark">
-                        <tr><th>เลขที่บิล</th><th>เวลา</th><th>เลข</th><th>ประเภท</th><th>ยอดซื้อ</th><th>สุทธิ</th><th>สถานะ</th></tr>
-                    </thead>
-                    <tbody>
-                        {% for s in saved_bills %}
-                        <tr>
-                            <td><code>{{ s[0] }}</code></td><td>{{ s[1] }}</td><td><b>{{ s[2] }}</b></td><td>{{ s[3] }}</td><td>{{ "{:,.2f}".format(s[4] or 0) }}</td><td>{{ "{:,.2f}".format(s[6] or 0) }}</td><td>{{ s[5] }}</td>
-                        </tr>
-                        {% else %}
-                        <tr><td colspan="7" class="text-muted">ยังไม่มีประวัติบิลในงวดนี้</td></tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
         </div>
     </div>
 
@@ -773,7 +773,8 @@ def campaigns_page(user: str):
         c.execute("SELECT lotto_name, draw_date, status, id FROM LotteryCampaigns ORDER BY id DESC")
         campaigns = c.fetchall()
         conn.close()
-        return Template(CAMPAIGN_TEMPLATE).render(username=user, role=role, campaigns=campaigns)
+        content = Template(CAMPAIGN_TEMPLATE).render(username=user, role=role, campaigns=campaigns)
+        return Template(LAYOUT).render(username=user, role=role, draw_date="เลือกงวด", content=content)
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -832,7 +833,7 @@ def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
             c_id, c_type = parts[0], parts[2]
             selected_c_id = int(c_id)
 
-        drafts, saved_bills = [], []
+        drafts = []
         sum_amt, sum_disc, sum_net = 0.0, 0.0, 0.0
         
         if c_id:
@@ -843,16 +844,13 @@ def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
                 sum_disc += float(row[6] or 0)
                 sum_net += float(row[7] or 0)
 
-            c.execute("SELECT bill_no, timestamp, num, type, amount, status, net FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) AND username=%s AND customer_id=%s AND customer_type=%s ORDER BY id DESC LIMIT 20", (draw, f"%{draw}%", user, c_id, c_type))
-            saved_bills = c.fetchall()
-
         conn.close()
         b_closed, b_3d, b_2d = get_blocked_display_data(draw)
 
         content = Template(BUY_CONTENT).render(
             username=user, draw_date=draw, customers=all_targets, selected_target_raw=selected, 
             selected_c_id=selected_c_id, drafts=drafts, draft_totals={"sum_amt": sum_amt, "sum_disc": sum_disc, "sum_net": sum_net},
-            saved_bills=saved_bills, block_closed=b_closed, block_3d=b_3d, block_2d=b_2d
+            block_closed=b_closed, block_3d=b_3d, block_2d=b_2d
         )
         return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content, msg=msg)
     except Exception as e:
@@ -958,8 +956,6 @@ def excel_ledger_page(user: str, draw: str):
         c = conn.cursor()
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
         role = c.fetchone()[0]
-
-        # ดึงประวัติธุรกรรมเรียงจากล่าสุด (id DESC หรือ timestamp DESC)
         c.execute("SELECT bill_no, timestamp, customer_name, username, type, num, amount, payout_rate, discount, net, status FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) ORDER BY id DESC", (draw, f"%{draw}%"))
         ledger_rows = c.fetchall()
         conn.close()
