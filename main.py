@@ -146,11 +146,11 @@ CAMPAIGN_TEMPLATE = """
 
             <div class="list-group">
                 {% for camp in campaigns %}
-                    <a href="/buy?user={{ username }}&draw={{ camp[0] }} (งวด {{ camp[1] }})" class="list-group-item list-group-item-action list-group-item-dark py-3 mb-2 text-center fs-5 fw-bold text-warning border border-light">
+                    <a href="/buy?user={{ username }}&draw={{ camp[0] }} งวด {{ camp[1] }}" class="list-group-item list-group-item-action list-group-item-dark py-3 mb-2 text-center fs-5 fw-bold text-warning border border-light">
                         🎯 {{ camp[0] }} งวดวันที่ {{ camp[1] }}
                     </a>
                 {% else %}
-                    <div class="text-center text-white py-4">ยังไม่มีงวดหวยที่เปิดใช้งานในขณะนี้</div>
+                    <div class="text-center text-white py-4">ยังไม่มีงวดหวยในฐานข้อมูล (สามารถสร้างใหม่ด้านบนได้เลย)</div>
                 {% endfor %}
             </div>
             
@@ -394,7 +394,8 @@ def get_blocked_display_data(draw_date):
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("SELECT DISTINCT raw_num, status, type FROM BlockedNumbers WHERE draw_date=%s", (draw_date,))
+        # ค้นหาเลขอั้นแบบยืดหยุ่น รองรับทั้งแบบเทียบตรงหรือมีข้อความงวดพ่วงท้าย
+        c.execute("SELECT DISTINCT raw_num, status, type FROM BlockedNumbers WHERE draw_date = %s OR draw_date ILIKE %s", (draw_date, f"%{draw_date}%"))
         rows = c.fetchall()
         conn.close()
         
@@ -440,7 +441,7 @@ def campaigns_page(user: str):
         user_res = c.fetchone()
         role = user_res[0] if user_res else "Member"
 
-        c.execute("SELECT lotto_name, draw_date FROM LotteryCampaigns WHERE status='Active' ORDER BY id DESC")
+        c.execute("SELECT lotto_name, draw_date FROM LotteryCampaigns ORDER BY id DESC")
         campaigns = c.fetchall()
         conn.close()
 
@@ -465,8 +466,14 @@ def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
     try:
         conn = connect_db()
         c = conn.cursor()
+        
+        # ดึงลูกค้า: ค้นหาจาก owner_username ก่อน ถ้าไม่เจอให้ดึงทั้งหมดเพื่อความมั่นใจ
         c.execute("SELECT id, name, 'Customer' FROM Customers WHERE owner_username=%s", (user,))
         custs = c.fetchall()
+        if not custs:
+            c.execute("SELECT id, name, 'Customer' FROM Customers")
+            custs = c.fetchall()
+            
         c.execute("SELECT id, username, 'User' FROM Users WHERE parent_user=%s", (user,))
         agents = c.fetchall()
         all_targets = custs + agents
@@ -485,7 +492,7 @@ def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
         if c_id:
             c.execute("SELECT id, num, amt_teng, amt_tod, type FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
             drafts = c.fetchall()
-            c.execute("SELECT bill_no, timestamp, num, amount, status FROM Transactions WHERE draw_date=%s AND username=%s AND customer_id=%s AND customer_type=%s ORDER BY id DESC LIMIT 20", (draw, user, c_id, c_type))
+            c.execute("SELECT bill_no, timestamp, num, amount, status FROM Transactions WHERE draw_date = %s OR draw_date ILIKE %s AND username=%s AND customer_id=%s AND customer_type=%s ORDER BY id DESC LIMIT 20", (draw, f"%{draw}%", user, c_id, c_type))
             saved_bills = c.fetchall()
 
         conn.close()
@@ -577,7 +584,7 @@ def dashboard_page(user: str, draw: str):
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("SELECT type, SUM(amount) FROM Transactions WHERE draw_date=%s GROUP BY type", (draw,))
+        c.execute("SELECT type, SUM(amount) FROM Transactions WHERE draw_date = %s OR draw_date ILIKE %s GROUP BY type", (draw, f"%{draw}%"))
         data = {"2ตัวบน":0, "2ตัวล่าง":0, "3ตัวตรง":0, "3ตัวโต๊ด":0}
         for t, amt in c.fetchall():
             if t in data: data[t] = float(amt)
@@ -585,7 +592,7 @@ def dashboard_page(user: str, draw: str):
         tot_2d = data["2ตัวบน"] + data["2ตัวล่าง"]
         tot_3d = data["3ตัวตรง"] + data["3ตัวโต๊ด"]
         
-        c.execute("SELECT type, num, SUM(amount), STRING_AGG(DISTINCT customer_name, ', ') FROM Transactions WHERE draw_date=%s GROUP BY type, num ORDER BY SUM(amount) DESC", (draw,))
+        c.execute("SELECT type, num, SUM(amount), STRING_AGG(DISTINCT customer_name, ', ') FROM Transactions WHERE draw_date = %s OR draw_date ILIKE %s GROUP BY type, num ORDER BY SUM(amount) DESC", (draw, f"%{draw}%"))
         dash_rows = c.fetchall()
         conn.close()
 
@@ -599,7 +606,7 @@ def block_page(user: str, draw: str, msg: str = None):
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("SELECT id, perm_num, type, status FROM BlockedNumbers WHERE draw_date=%s ORDER BY id DESC", (draw,))
+        c.execute("SELECT id, perm_num, type, status FROM BlockedNumbers WHERE draw_date = %s OR draw_date ILIKE %s ORDER BY id DESC", (draw, f"%{draw}%"))
         blocks = c.fetchall()
         conn.close()
 
@@ -644,6 +651,9 @@ def customers_page(user: str, draw: str, msg: str = None):
         c = conn.cursor()
         c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d FROM Customers WHERE owner_username=%s", (user,))
         custs_list = c.fetchall()
+        if not custs_list:
+            c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d FROM Customers")
+            custs_list = c.fetchall()
         conn.close()
 
         content = Template(CUSTOMER_CONTENT).render(username=user, draw_date=draw, customers_list=custs_list)
