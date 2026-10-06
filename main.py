@@ -7,7 +7,7 @@ import itertools
 
 app = FastAPI(title="Lotto ERP Full Enterprise Cloud")
 
-DB_URI = "postgresql://postgres.mpyswshlrxwpirzdexrn:[YOUR-PASSWORD]@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres"
+DB_URI = "postgresql://postgres.mpyswshlrxwpirzdexrn:Clublifekorat3888@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres"
 
 def connect_db():
     return psycopg2.connect(DB_URI)
