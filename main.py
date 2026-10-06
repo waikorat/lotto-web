@@ -13,24 +13,6 @@ DB_URI = "postgresql://postgres.mpyswshlrxwpirzdexrn:Clublifekorat3888@aws-0-ap-
 def connect_db():
     return psycopg2.connect(DB_URI)
 
-# ================= Helper: Recursive Downlines =================
-def get_all_downline_users(target_user):
-    downlines = []
-    try:
-        conn = connect_db()
-        c = conn.cursor()
-        def fetch(parent):
-            c.execute("SELECT username FROM Users WHERE parent_user=%s", (parent,))
-            for child in [r[0] for r in c.fetchall()]:
-                if child not in downlines:
-                    downlines.append(child)
-                    fetch(child)
-        fetch(target_user)
-        conn.close()
-    except:
-        pass
-    return downlines
-
 # ================= HTML Layout & Templates =================
 
 LAYOUT = """
@@ -689,9 +671,11 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
                 if num_str: hold_nums.append(num_str)
                 if '*' in amt_str:
                     ap = amt_str.split('*')
-                    top, bot = float(ap[0] or 0), float(ap[1] or 0)
+                    top = float(ap[0]) if ap[0].strip() else 0.0
+                    bot = float(ap[1]) if ap[1].strip() else 0.0
                 else:
-                    top, bot = float(amt_str or 0), 0.0
+                    top = float(amt_str) if amt_str.strip() else 0.0
+                    bot = 0.0
                 
                 for n in hold_nums:
                     if len(n) == 3:
@@ -705,7 +689,8 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
                 hold_nums.append(block.strip())
         conn.commit()
         conn.close()
-    except: pass
+    except Exception as e:
+        print("Add Draft Error:", e)
     return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={customer_info}", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.post("/confirm-bill")
@@ -798,7 +783,7 @@ def results_page(user: str, draw: str):
             for cname, num, ttype, amt in txs:
                 payout = 0.0
                 if ttype == "3ตัวตรง" and num == prize_1:
-                    payout = amt * 500  # เรทตัวอย่าง
+                    payout = amt * 500
                 elif ttype == "3ตัวโต๊ด" and sorted(num) == sorted(prize_1) and num != prize_1:
                     payout = amt * 100
                 elif ttype == "2ตัวบน" and num == prize_1[-2:]:
