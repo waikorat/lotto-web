@@ -59,7 +59,7 @@ LAYOUT = """
             <div class="d-flex align-items-center">
                 <span id="live-clock" class="text-info fw-bold me-3 font-monospace">🕒 กำลังโหลด...</span>
                 <span class="text-light me-3">ผู้ใช้: <b>{{ username }} ({{ role }})</b></span>
-                <a href="/campaigns?user={{ username }}" class="btn btn-outline-warning btn-sm me-2">📌 เปลี่ยนงวด</a>
+                <a href="/campaigns?user={{ username }}" class="btn btn-outline-warning btn-sm me-2">📌 จัดการ/เปิดงวดหวย</a>
                 <a href="/logout" class="btn btn-outline-danger btn-sm">ออกจากระบบ</a>
             </div>
         </div>
@@ -127,7 +127,7 @@ CAMPAIGN_TEMPLATE = """
 <body class="bg-dark text-light">
     <div class="container my-5" style="max-width: 600px;">
         <div class="card bg-secondary p-4 shadow">
-            <h2 class="text-center text-warning mb-4">📌 เลือกงวดหวยที่เปิดให้แทงขณะนี้</h2>
+            <h2 class="text-center text-warning mb-4">📌 จัดการและเลือกงวดหวย</h2>
             
             {% if role == 'Admin' %}
             <div class="card bg-dark p-3 mb-4 border border-warning">
@@ -147,6 +147,7 @@ CAMPAIGN_TEMPLATE = """
             </div>
             {% endif %}
 
+            <h5 class="text-light mb-3">ราย่องวดหวยทั้งหมด</h5>
             <div class="list-group">
                 {% for camp in campaigns %}
                     <a href="/buy?user={{ username }}&draw={{ camp[0] }} งวด {{ camp[1] }}" class="list-group-item list-group-item-action list-group-item-dark py-3 mb-2 text-center fs-5 fw-bold text-warning border border-light">
@@ -213,8 +214,8 @@ BUY_CONTENT = """
                         {% for d in drafts %}
                         <tr>
                             <td><b>{{ d[1] }}</b></td>
-                            <td>{{ d[2] if d[2] > 0 else '-' }}</td>
-                            <td>{{ d[3] if d[3] > 0 else '-' }}</td>
+                            <td>{{ d[2] if d[2] and d[2] > 0 else '-' }}</td>
+                            <td>{{ d[3] if d[3] and d[3] > 0 else '-' }}</td>
                             <td><span class="badge bg-danger">{{ d[4] }}</span></td>
                         </tr>
                         {% else %}
@@ -243,7 +244,7 @@ BUY_CONTENT = """
                     <tbody>
                         {% for s in saved_bills %}
                         <tr>
-                            <td>{{ s[0] }}</td><td>{{ s[1] }}</td><td><b>{{ s[2] }}</b></td><td>{{ "{:,.2f}".format(s[3]) }}</td><td>{{ s[4] }}</td>
+                            <td>{{ s[0] }}</td><td>{{ s[1] }}</td><td><b>{{ s[2] }}</b></td><td>{{ "{:,.2f}".format(s[3] or 0) }}</td><td>{{ s[4] }}</td>
                         </tr>
                         {% else %}
                         <tr><td colspan="5" class="text-muted">ยังไม่มีประวัติบิลในงวดนี้</td></tr>
@@ -288,7 +289,7 @@ DASHBOARD_CONTENT = """
             <tbody>
                 {% for r in dash_rows %}
                 <tr>
-                    <td>{{ r[0] }}</td><td><b>{{ r[1] }}</b></td><td>{{ "{:,.2f}".format(r[2]) }}</td><td>{{ r[3] }}</td>
+                    <td>{{ r[0] }}</td><td><b>{{ r[1] }}</b></td><td>{{ "{:,.2f}".format(r[2] or 0) }}</td><td>{{ r[3] }}</td>
                 </tr>
                 {% else %}
                 <tr><td colspan="4" class="text-muted">ยังไม่มีรายการซื้อในงวดนี้</td></tr>
@@ -309,12 +310,12 @@ RISK_CONTENT = """
             </thead>
             <tbody>
                 {% for r in risk_rows %}
-                <tr {% if r[2] > 5000 %}class="table-danger"{% endif %}>
+                <tr {% if r[2] and r[2] > 5000 %}class="table-danger"{% endif %}>
                     <td>{{ r[0] }}</td>
                     <td><b>{{ r[1] }}</b></td>
-                    <td>{{ "{:,.2f}".format(r[2]) }}</td>
+                    <td>{{ "{:,.2f}".format(r[2] or 0) }}</td>
                     <td>
-                        {% if r[2] > 5000 %}
+                        {% if r[2] and r[2] > 5000 %}
                             <span class="badge bg-danger">⚠️ ยอดสูงเกินเพดาน (ความเสี่ยงสูง)</span>
                         {% else %}
                             <span class="badge bg-success">ปกติ</span>
@@ -371,7 +372,7 @@ RESULTS_CONTENT = """
             <tbody>
                 {% for w in winners %}
                 <tr>
-                    <td>{{ w[0] }}</td><td><b>{{ w[1] }}</b></td><td>{{ w[2] }}</td><td>{{ "{:,.2f}".format(w[3]) }}</td><td class="text-success fw-bold">฿{{ "{:,.2f}".format(w[4]) }}</td>
+                    <td>{{ w[0] }}</td><td><b>{{ w[1] }}</b></td><td>{{ w[2] }}</td><td>{{ "{:,.2f}".format(w[3] or 0) }}</td><td class="text-success fw-bold">฿{{ "{:,.2f}".format(w[4] or 0) }}</td>
                 </tr>
                 {% else %}
                 <tr><td colspan="5" class="text-muted">ยังไม่มีผู้ถูกรางวัล หรือยังไม่ได้บันทึกผลรางวัล</td></tr>
@@ -726,7 +727,7 @@ def dashboard_page(user: str, draw: str):
         c.execute("SELECT type, SUM(amount) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY type", (draw, f"%{draw}%"))
         data = {"2ตัวบน":0, "2ตัวล่าง":0, "3ตัวตรง":0, "3ตัวโต๊ด":0}
         for t, amt in c.fetchall():
-            if t in data: data[t] = float(amt)
+            if t in data: data[t] = float(amt or 0)
         tot_2d = data["2ตัวบน"] + data["2ตัวล่าง"]
         tot_3d = data["3ตัวตรง"] + data["3ตัวโต๊ด"]
         
@@ -782,17 +783,18 @@ def results_page(user: str, draw: str):
             txs = c.fetchall()
             for cname, num, ttype, amt in txs:
                 payout = 0.0
+                amt_val = float(amt or 0)
                 if ttype == "3ตัวตรง" and num == prize_1:
-                    payout = amt * 500
+                    payout = amt_val * 500
                 elif ttype == "3ตัวโต๊ด" and sorted(num) == sorted(prize_1) and num != prize_1:
-                    payout = amt * 100
+                    payout = amt_val * 100
                 elif ttype == "2ตัวบน" and num == prize_1[-2:]:
-                    payout = amt * 90
+                    payout = amt_val * 90
                 elif ttype == "2ตัวล่าง" and num == bottom_2:
-                    payout = amt * 90
+                    payout = amt_val * 90
                 
                 if payout > 0:
-                    winners.append((cname, num, ttype, amt, payout))
+                    winners.append((cname, num, ttype, amt_val, payout))
                     total_payout += payout
 
         conn.close()
