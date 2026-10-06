@@ -5,7 +5,7 @@ import psycopg2
 from datetime import datetime
 import itertools
 
-app = FastAPI(title="Lotto ERP Full Cloud System")
+app = FastAPI(title="Lotto ERP Full Enterprise Cloud")
 
 # ⚠ อย่าลืมเปลี่ยน [YOUR-PASSWORD] เป็นรหัสผ่านฐานข้อมูล Supabase ของคุณ
 DB_URI = "postgresql://postgres.mpyswshlrxwpirzdexrn:Clublifekorat3888@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres"
@@ -13,7 +13,25 @@ DB_URI = "postgresql://postgres.mpyswshlrxwpirzdexrn:Clublifekorat3888@aws-0-ap-
 def connect_db():
     return psycopg2.connect(DB_URI)
 
-# ================= HTML Templates =================
+# ================= Helper: Recursive Downlines =================
+def get_all_downline_users(target_user):
+    downlines = []
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        def fetch(parent):
+            c.execute("SELECT username FROM Users WHERE parent_user=%s", (parent,))
+            for child in [r[0] for r in c.fetchall()]:
+                if child not in downlines:
+                    downlines.append(child)
+                    fetch(child)
+        fetch(target_user)
+        conn.close()
+    except:
+        pass
+    return downlines
+
+# ================= HTML Layout & Templates =================
 
 LAYOUT = """
 <!DOCTYPE html>
@@ -39,7 +57,6 @@ LAYOUT = """
     </script>
 </head>
 <body class="bg-light">
-    <!-- Navbar หลัก -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark px-3">
         <a class="navbar-brand fw-bold text-warning" href="/buy?user={{ username }}&draw={{ draw_date }}">☁️ Lotto ERP</a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
@@ -49,19 +66,23 @@ LAYOUT = """
             <ul class="navbar-nav me-auto">
                 <li class="nav-item"><a class="nav-link" href="/dashboard?user={{ username }}&draw={{ draw_date }}">📊 แดชบอร์ด</a></li>
                 <li class="nav-item"><a class="nav-link" href="/buy?user={{ username }}&draw={{ draw_date }}">🛒 บันทึกโพย</a></li>
+                {% if role in ['Admin', 'Master Agent'] %}
+                <li class="nav-item"><a class="nav-link" href="/risk?user={{ username }}&draw={{ draw_date }}">⚠️ เช็คความเสี่ยง</a></li>
+                <li class="nav-item"><a class="nav-link" href="/results?user={{ username }}&draw={{ draw_date }}">🏆 ออกผลรางวัล</a></li>
+                {% endif %}
                 <li class="nav-item"><a class="nav-link" href="/block?user={{ username }}&draw={{ draw_date }}">🚫 จัดการเลขอั้น</a></li>
                 <li class="nav-item"><a class="nav-link" href="/customers?user={{ username }}&draw={{ draw_date }}">👥 จัดการลูกค้า</a></li>
+                <li class="nav-item"><a class="nav-link" href="/users?user={{ username }}&draw={{ draw_date }}">⚙️ จัดการสมาชิก</a></li>
             </ul>
             <div class="d-flex align-items-center">
                 <span id="live-clock" class="text-info fw-bold me-3 font-monospace">🕒 กำลังโหลด...</span>
-                <span class="text-light me-3">ผู้ใช้: <b>{{ username }}</b></span>
+                <span class="text-light me-3">ผู้ใช้: <b>{{ username }} ({{ role }})</b></span>
                 <a href="/campaigns?user={{ username }}" class="btn btn-outline-warning btn-sm me-2">📌 เปลี่ยนงวด</a>
                 <a href="/logout" class="btn btn-outline-danger btn-sm">ออกจากระบบ</a>
             </div>
         </div>
     </nav>
 
-    <!-- แถบแสดงงวดหวยปัจจุบัน -->
     <div class="bg-warning text-dark text-center py-2 fw-bold shadow-sm" style="font-size: 1.1rem;">
         📌 กำลังปฏิบัติงานในงวด: <span class="text-danger text-decoration-underline">{{ draw_date }}</span>
     </div>
@@ -150,7 +171,7 @@ CAMPAIGN_TEMPLATE = """
                         🎯 {{ camp[0] }} งวดวันที่ {{ camp[1] }}
                     </a>
                 {% else %}
-                    <div class="text-center text-white py-4">ยังไม่มีงวดหวยในฐานข้อมูล (สามารถสร้างใหม่ด้านบนได้เลย)</div>
+                    <div class="text-center text-white py-4">ยังไม่มีงวดหวยในฐานข้อมูล</div>
                 {% endfor %}
             </div>
             
@@ -167,14 +188,14 @@ BUY_CONTENT = """
 <div class="row">
     <div class="col-lg-8">
         <div class="card shadow p-4 mb-4">
-            <form method="POST" action="/submit-buy">
+            <form id="custForm" method="POST" action="/submit-buy">
                 <input type="hidden" name="user" value="{{ username }}">
                 <input type="hidden" name="draw" value="{{ draw_date }}">
                 <div class="mb-3">
                     <label class="form-label fw-bold">เลือกลูกค้า / สายงาน:</label>
-                    <select name="customer_info" class="form-select form-select-lg" onchange="this.form.submit()">
+                    <select name="customer_info" id="customerSelect" class="form-select form-select-lg" onchange="document.getElementById('custForm').submit()">
                         {% for c in customers %}
-                            <option value="{{ c[0] }}|{{ c[1] }}|{{ c[2] }}" {% if selected_c_id and selected_c_id|string == c[0]|string %}selected{% endif %}>{{ c[1] }} ({{ c[2] }})</option>
+                            <option value="{{ c[0] }}|{{ c[1] }}|{{ c[2] }}" {% if selected_target_raw and selected_target_raw == c[0]|string ~ '|' ~ c[1] ~ '|' ~ c[2] %}selected{% endif %}>{{ c[1] }} ({{ c[2] }})</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -183,7 +204,7 @@ BUY_CONTENT = """
             <form method="POST" action="/add-draft">
                 <input type="hidden" name="user" value="{{ username }}">
                 <input type="hidden" name="draw" value="{{ draw_date }}">
-                <input type="hidden" name="customer_info" value="{{ selected_target_raw }}">
+                <input type="hidden" name="customer_info" id="hiddenCustomerInfo" value="{{ selected_target_raw }}">
                 <div class="mb-3">
                     <label class="form-label fw-bold">คีย์รายการ (เช่น 123=100*100, 456=50 หรือ 12,34=50):</label>
                     <input type="text" name="raw_input" class="form-control form-control-lg" placeholder="พิมพ์เลขและราคา..." required autofocus>
@@ -192,6 +213,12 @@ BUY_CONTENT = """
                 <button type="submit" class="btn btn-success btn-lg w-100 fw-bold">📥 บันทึกลงรายการร่าง</button>
             </form>
         </div>
+
+        <script>
+            document.getElementById('customerSelect').addEventListener('change', function() {
+                document.getElementById('hiddenCustomerInfo').value = this.value;
+            });
+        </script>
 
         <div class="card shadow p-4 mb-4">
             <h4 class="text-primary mb-3">📋 1. รายการร่าง (รอยืนยัน)</h4>
@@ -290,9 +317,92 @@ DASHBOARD_CONTENT = """
 </div>
 """
 
+RISK_CONTENT = """
+<div class="card shadow p-4">
+    <h2 class="text-danger mb-4">⚠️ ตรวจสอบความเสี่ยงและยอดแทงรวม (Admin Control)</h2>
+    <div class="table-responsive">
+        <table class="table table-striped table-bordered text-center align-middle">
+            <thead class="table-dark">
+                <tr><th>ประเภท</th><th>ตัวเลข</th><th>ยอดแทงรวมสุทธิ</th><th>สถานะความเสี่ยง</th></tr>
+            </thead>
+            <tbody>
+                {% for r in risk_rows %}
+                <tr {% if r[2] > 5000 %}class="table-danger"{% endif %}>
+                    <td>{{ r[0] }}</td>
+                    <td><b>{{ r[1] }}</b></td>
+                    <td>{{ "{:,.2f}".format(r[2]) }}</td>
+                    <td>
+                        {% if r[2] > 5000 %}
+                            <span class="badge bg-danger">⚠️ ยอดสูงเกินเพดาน (ความเสี่ยงสูง)</span>
+                        {% else %}
+                            <span class="badge bg-success">ปกติ</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4" class="text-muted">ยังไม่มีข้อมูลการแทงในงวดนี้</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+"""
+
+RESULTS_CONTENT = """
+<div class="card shadow p-4 mb-4">
+    <h2 class="text-success mb-3">🏆 บันทึกผลการออกรางวัลประจำงวด</h2>
+    <form method="POST" action="/save-results" class="row g-3">
+        <input type="hidden" name="user" value="{{ username }}">
+        <input type="hidden" name="draw" value="{{ draw_date }}">
+        <div class="col-md-6">
+            <label class="form-label fw-bold">รางวัลที่ 1 (3 ตัวตรง):</label>
+            <input type="text" name="prize_1" class="form-control form-control-lg" value="{{ prize_1 }}" placeholder="เช่น 123" required>
+        </div>
+        <div class="col-md-6">
+            <label class="form-label fw-bold">เลขท้าย 2 ตัว:</label>
+            <input type="text" name="bottom_2" class="form-control form-control-lg" value="{{ bottom_2 }}" placeholder="เช่น 45" required>
+        </div>
+        <div class="col-12">
+            <button type="submit" class="btn btn-success btn-lg w-100 fw-bold">💾 บันทึกผลรางวัลและคำนวณสรุปยอด</button>
+        </div>
+    </form>
+</div>
+
+<div class="card shadow p-4">
+    <h3 class="text-primary mb-3">📊 สรุปผลกำไร / ขาดทุน และรายงานผลรางวัล</h3>
+    <div class="row text-center mb-4">
+        <div class="col-md-4 mb-2"><div class="p-3 bg-light border rounded"><h5>ยอดขายรวม</h5><h3 class="text-dark">฿{{ "{:,.2f}".format(total_sales) }}</h3></div></div>
+        <div class="col-md-4 mb-2"><div class="p-3 bg-light border rounded"><h5>หักส่วนลดรวม</h5><h3 class="text-danger">฿{{ "{:,.2f}".format(total_discount) }}</h3></div></div>
+        <div class="col-md-4 mb-2"><div class="p-3 bg-light border rounded"><h5>ยอดขายสุทธิ (คงเหลือ)</h5><h3 class="text-primary">฿{{ "{:,.2f}".format(total_net) }}</h3></div></div>
+    </div>
+    <div class="row text-center mb-4">
+        <div class="col-md-6 mb-2"><div class="p-3 bg-light border rounded"><h5>จ่ายเงินรางวัลรวม</h5><h3 class="text-danger">฿{{ "{:,.2f}".format(total_payout) }}</h3></div></div>
+        <div class="col-md-6 mb-2"><div class="p-3 bg-warning text-dark border rounded"><h5>กำไร / ขาดทุนสุทธิ</h5><h3 class="fw-bold">฿{{ "{:,.2f}".format(total_net - total_payout) }}</h3></div></div>
+    </div>
+
+    <h4 class="mt-4 mb-3">รายชื่อผู้ถูกรางวัลในงวดนี้</h4>
+    <div class="table-responsive">
+        <table class="table table-striped table-bordered text-center align-middle">
+            <thead class="table-dark">
+                <tr><th>ผู้ซื้อ / ลูกค้า</th><th>เลขอั้น/เลขที่ซื้อ</th><th>ประเภท</th><th>ยอดซื้อ</th><th>เงินรางวัลที่ได้รับ</th></tr>
+            </thead>
+            <tbody>
+                {% for w in winners %}
+                <tr>
+                    <td>{{ w[0] }}</td><td><b>{{ w[1] }}</b></td><td>{{ w[2] }}</td><td>{{ "{:,.2f}".format(w[3]) }}</td><td class="text-success fw-bold">฿{{ "{:,.2f}".format(w[4]) }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-muted">ยังไม่มีผู้ถูกรางวัล หรือยังไม่ได้บันทึกผลรางวัล</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+"""
+
 BLOCK_CONTENT = """
 <div class="card shadow p-4">
-    <h3 class="text-danger mb-3">🚫 จัดการเลขอั้น (Admin / ผู้ดูแล)</h3>
+    <h3 class="text-danger mb-3">🚫 จัดการเลขอั้น</h3>
     <form method="POST" action="/save-block" class="row g-3 mb-4">
         <input type="hidden" name="user" value="{{ username }}">
         <input type="hidden" name="draw" value="{{ draw_date }}">
@@ -390,19 +500,69 @@ CUSTOMER_CONTENT = """
 </div>
 """
 
+USERS_CONTENT = """
+<div class="row">
+    <div class="col-md-4 mb-4">
+        <div class="card shadow p-4">
+            <h4 class="text-success mb-3">⚙️ สร้างสายงานสมาชิก (4 ระดับ)</h4>
+            <form method="POST" action="/save-user-level">
+                <input type="hidden" name="user" value="{{ username }}">
+                <input type="hidden" name="draw" value="{{ draw_date }}">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Username:</label>
+                    <input type="text" name="new_username" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Password:</label>
+                    <input type="password" name="new_password" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold">ระดับสิทธิ์ (Role):</label>
+                    <select name="new_role" class="form-select">
+                        <option value="Admin">Admin</option>
+                        <option value="Master Agent">Master Agent</option>
+                        <option value="Agent">Agent</option>
+                        <option value="Member">Member</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-success w-100 fw-bold">บันทึกสมาชิกใหม่</button>
+            </form>
+        </div>
+    </div>
+    <div class="col-md-8">
+        <div class="card shadow p-4">
+            <h4 class="text-primary mb-3">🗂️ รายชื่อสมาชิกใต้สายงาน</h4>
+            <div class="table-responsive">
+                <table class="table table-striped table-bordered text-center align-middle">
+                    <thead class="table-dark">
+                        <tr><th>ID</th><th>Username</th><th>ระดับสิทธิ์</th><th>ผู้ดูแล (Parent)</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for u in users_list %}
+                        <tr>
+                            <td>{{ u[0] }}</td><td><b>{{ u[1] }}</b></td><td><span class="badge bg-secondary">{{ u[2] }}</span></td><td>{{ u[3] }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-muted">ยังไม่มีสมาชิกในสายงาน</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+"""
+
 def get_blocked_display_data(draw_date):
     try:
         conn = connect_db()
         c = conn.cursor()
-        # ค้นหาเลขอั้นแบบยืดหยุ่น รองรับทั้งแบบเทียบตรงหรือมีข้อความงวดพ่วงท้าย
         c.execute("SELECT DISTINCT raw_num, status, type FROM BlockedNumbers WHERE draw_date = %s OR draw_date ILIKE %s", (draw_date, f"%{draw_date}%"))
         rows = c.fetchall()
         conn.close()
-        
         l_c = [r[0] for r in rows if r[1]=="ปิดรับ"]
         l_3 = [r[0] for r in rows if r[1]!="ปิดรับ" and (r[2]=="3ตัว" or len(r[0])==3)]
         l_2 = [r[0] for r in rows if r[1]!="ปิดรับ" and (r[2]=="2ตัว" or len(r[0])==2)]
-        
         return ", ".join(l_c), ", ".join(l_3), ", ".join(l_2)
     except:
         return "", "", ""
@@ -444,7 +604,6 @@ def campaigns_page(user: str):
         c.execute("SELECT lotto_name, draw_date FROM LotteryCampaigns ORDER BY id DESC")
         campaigns = c.fetchall()
         conn.close()
-
         return Template(CAMPAIGN_TEMPLATE).render(username=user, role=role, campaigns=campaigns)
     except Exception as e:
         return f"Error: {str(e)}"
@@ -457,8 +616,7 @@ def create_campaign(user: str = Form(...), lotto_name: str = Form(...), draw_dat
         c.execute("INSERT INTO LotteryCampaigns (lotto_name, draw_date, status) VALUES (%s, %s, 'Active')", (lotto_name, draw_date))
         conn.commit()
         conn.close()
-    except Exception as e:
-        print("Campaign Create Error:", e)
+    except: pass
     return RedirectResponse(url=f"/campaigns?user={user}", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/buy", response_class=HTMLResponse)
@@ -466,8 +624,10 @@ def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
     try:
         conn = connect_db()
         c = conn.cursor()
-        
-        # ดึงลูกค้า: ค้นหาจาก owner_username ก่อน ถ้าไม่เจอให้ดึงทั้งหมดเพื่อความมั่นใจ
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        u_role_res = c.fetchone()
+        role = u_role_res[0] if u_role_res else "Member"
+
         c.execute("SELECT id, name, 'Customer' FROM Customers WHERE owner_username=%s", (user,))
         custs = c.fetchall()
         if not custs:
@@ -492,11 +652,10 @@ def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
         if c_id:
             c.execute("SELECT id, num, amt_teng, amt_tod, type FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
             drafts = c.fetchall()
-            c.execute("SELECT bill_no, timestamp, num, amount, status FROM Transactions WHERE draw_date = %s OR draw_date ILIKE %s AND username=%s AND customer_id=%s AND customer_type=%s ORDER BY id DESC LIMIT 20", (draw, f"%{draw}%", user, c_id, c_type))
+            c.execute("SELECT bill_no, timestamp, num, amount, status FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) AND username=%s AND customer_id=%s AND customer_type=%s ORDER BY id DESC LIMIT 20", (draw, f"%{draw}%", user, c_id, c_type))
             saved_bills = c.fetchall()
 
         conn.close()
-        
         b_closed, b_3d, b_2d = get_blocked_display_data(draw)
 
         content = Template(BUY_CONTENT).render(
@@ -504,7 +663,7 @@ def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
             selected_c_id=selected_c_id, drafts=drafts, saved_bills=saved_bills,
             block_closed=b_closed, block_3d=b_3d, block_2d=b_2d
         )
-        return Template(LAYOUT).render(username=user, draw_date=draw, content=content, msg=msg)
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content, msg=msg)
     except Exception as e:
         return f"System Error: {str(e)}"
 
@@ -516,7 +675,6 @@ def submit_buy(user: str = Form(...), draw: str = Form(...), customer_info: str 
 def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str = Form(...), raw_input: str = Form(...)):
     parts = customer_info.split('|')
     c_id, c_type = parts[0], parts[2]
-    
     raw_input = raw_input.strip().upper().replace(' ', '').replace('X', '*').replace('+', '*').replace('/', '*')
     blocks = raw_input.split(',')
     
@@ -547,22 +705,18 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
                 hold_nums.append(block.strip())
         conn.commit()
         conn.close()
-    except Exception as e:
-        print("Error:", e)
-
+    except: pass
     return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={customer_info}", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.post("/confirm-bill")
 def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: str = Form(...)):
     parts = customer_info.split('|')
     c_id, c_name, c_type = parts[0], parts[1], parts[2]
-    
     try:
         conn = connect_db()
         c = conn.cursor()
         c.execute("SELECT num, type, amt_teng, amt_tod FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
         drafts = c.fetchall()
-        
         if drafts:
             bill_no = f"B-{datetime.now().strftime('%H%M%S')}"
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -570,13 +724,10 @@ def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: st
                 amt = float(a1 or 0) if float(a1 or 0) > 0 else float(a2 or 0)
                 c.execute("INSERT INTO Transactions (draw_date, timestamp, username, customer_id, customer_name, customer_type, bill_no, num, type, amount, status, discount, net, payout_rate) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
                           (draw, ts, user, int(c_id), c_name, c_type, bill_no, n, t_type, amt, "ปกติ", 0.0, amt, 0.0))
-            
             c.execute("DELETE FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
             conn.commit()
         conn.close()
-    except Exception as e:
-        print("Confirm Error:", e)
-
+    except: pass
     return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={customer_info}&msg=บันทึกบิลสำเร็จ!", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -584,34 +735,113 @@ def dashboard_page(user: str, draw: str):
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("SELECT type, SUM(amount) FROM Transactions WHERE draw_date = %s OR draw_date ILIKE %s GROUP BY type", (draw, f"%{draw}%"))
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role = c.fetchone()[0]
+
+        c.execute("SELECT type, SUM(amount) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY type", (draw, f"%{draw}%"))
         data = {"2ตัวบน":0, "2ตัวล่าง":0, "3ตัวตรง":0, "3ตัวโต๊ด":0}
         for t, amt in c.fetchall():
             if t in data: data[t] = float(amt)
-        
         tot_2d = data["2ตัวบน"] + data["2ตัวล่าง"]
         tot_3d = data["3ตัวตรง"] + data["3ตัวโต๊ด"]
         
-        c.execute("SELECT type, num, SUM(amount), STRING_AGG(DISTINCT customer_name, ', ') FROM Transactions WHERE draw_date = %s OR draw_date ILIKE %s GROUP BY type, num ORDER BY SUM(amount) DESC", (draw, f"%{draw}%"))
+        c.execute("SELECT type, num, SUM(amount), STRING_AGG(DISTINCT customer_name, ', ') FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY type, num ORDER BY SUM(amount) DESC", (draw, f"%{draw}%"))
         dash_rows = c.fetchall()
         conn.close()
 
         content = Template(DASHBOARD_CONTENT).render(tot_2d=tot_2d, tot_3d=tot_3d, dash_rows=dash_rows)
-        return Template(LAYOUT).render(username=user, draw_date=draw, content=content)
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
     except Exception as e:
         return f"Error: {str(e)}"
+
+@app.get("/risk", response_class=HTMLResponse)
+def risk_page(user: str, draw: str):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role = c.fetchone()[0]
+
+        c.execute("SELECT type, num, SUM(amount) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY type, num ORDER BY SUM(amount) DESC", (draw, f"%{draw}%"))
+        risk_rows = c.fetchall()
+        conn.close()
+
+        content = Template(RISK_CONTENT).render(risk_rows=risk_rows)
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@app.get("/results", response_class=HTMLResponse)
+def results_page(user: str, draw: str):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role = c.fetchone()[0]
+
+        c.execute("SELECT prize_1, bottom_2 FROM DrawResults WHERE draw_date = %s", (draw,))
+        res = c.fetchone()
+        prize_1 = res[0] if res else ""
+        bottom_2 = res[1] if res else ""
+
+        c.execute("SELECT SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
+        sales_res = c.fetchone()
+        total_sales = float(sales_res[0] or 0)
+        total_discount = float(sales_res[1] or 0)
+        total_net = float(sales_res[2] or 0)
+
+        winners = []
+        total_payout = 0.0
+        if prize_1 and bottom_2:
+            c.execute("SELECT customer_name, num, type, amount FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
+            txs = c.fetchall()
+            for cname, num, ttype, amt in txs:
+                payout = 0.0
+                if ttype == "3ตัวตรง" and num == prize_1:
+                    payout = amt * 500  # เรทตัวอย่าง
+                elif ttype == "3ตัวโต๊ด" and sorted(num) == sorted(prize_1) and num != prize_1:
+                    payout = amt * 100
+                elif ttype == "2ตัวบน" and num == prize_1[-2:]:
+                    payout = amt * 90
+                elif ttype == "2ตัวล่าง" and num == bottom_2:
+                    payout = amt * 90
+                
+                if payout > 0:
+                    winners.append((cname, num, ttype, amt, payout))
+                    total_payout += payout
+
+        conn.close()
+        content = Template(RESULTS_CONTENT).render(
+            prize_1=prize_1, bottom_2=bottom_2, total_sales=total_sales, 
+            total_discount=total_discount, total_net=total_net, winners=winners, total_payout=total_payout
+        )
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@app.post("/save-results")
+def save_results(user: str = Form(...), draw: str = Form(...), prize_1: str = Form(...), bottom_2: str = Form(...)):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("INSERT INTO DrawResults (draw_date, prize_1, bottom_2) VALUES (%s, %s, %s) ON CONFLICT (draw_date) DO UPDATE SET prize_1=EXCLUDED.prize_1, bottom_2=EXCLUDED.bottom_2", (draw, prize_1, bottom_2))
+        conn.commit()
+        conn.close()
+    except: pass
+    return RedirectResponse(url=f"/results?user={user}&draw={draw}&msg=บันทึกผลรางวัลสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/block", response_class=HTMLResponse)
 def block_page(user: str, draw: str, msg: str = None):
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("SELECT id, perm_num, type, status FROM BlockedNumbers WHERE draw_date = %s OR draw_date ILIKE %s ORDER BY id DESC", (draw, f"%{draw}%"))
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role = c.fetchone()[0]
+        c.execute("SELECT id, perm_num, type, status FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s) ORDER BY id DESC", (draw, f"%{draw}%"))
         blocks = c.fetchall()
         conn.close()
-
         content = Template(BLOCK_CONTENT).render(username=user, draw_date=draw, blocks=blocks)
-        return Template(LAYOUT).render(username=user, draw_date=draw, content=content, msg=msg)
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content, msg=msg)
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -629,16 +859,14 @@ def save_block(user: str = Form(...), draw: str = Form(...), raw_nums: str = For
                     c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, perm_num, type, status, custom_rate) VALUES (%s,%s,%s,%s,%s,%s)", (draw, num, p, t, block_status, 0.0))
         conn.commit()
         conn.close()
-    except Exception as e:
-        print("Block Error:", e)
+    except: pass
     return RedirectResponse(url=f"/block?user={user}&draw={draw}&msg=บันทึกเลขอั้นสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/delete-block")
 def delete_block(id: int, user: str, draw: str):
     try:
         conn = connect_db()
-        c = conn.cursor()
-        c.execute("DELETE FROM BlockedNumbers WHERE id=%s", (id,))
+        conn.cursor().execute("DELETE FROM BlockedNumbers WHERE id=%s", (id,))
         conn.commit()
         conn.close()
     except: pass
@@ -649,15 +877,16 @@ def customers_page(user: str, draw: str, msg: str = None):
     try:
         conn = connect_db()
         c = conn.cursor()
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role = c.fetchone()[0]
         c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d FROM Customers WHERE owner_username=%s", (user,))
         custs_list = c.fetchall()
         if not custs_list:
             c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d FROM Customers")
             custs_list = c.fetchall()
         conn.close()
-
         content = Template(CUSTOMER_CONTENT).render(username=user, draw_date=draw, customers_list=custs_list)
-        return Template(LAYOUT).render(username=user, draw_date=draw, content=content, msg=msg)
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content, msg=msg)
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -670,9 +899,34 @@ def save_customer(user: str = Form(...), draw: str = Form(...), name: str = Form
                   (name, user, 1, disc_total, pay_3d, pay_3tod, pay_2d))
         conn.commit()
         conn.close()
-    except Exception as e:
-        print("Cust Error:", e)
+    except: pass
     return RedirectResponse(url=f"/customers?user={user}&draw={draw}&msg=เพิ่มลูกค้าสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.get("/users", response_class=HTMLResponse)
+def users_page(user: str, draw: str, msg: str = None):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role = c.fetchone()[0]
+        c.execute("SELECT id, username, role, parent_user FROM Users WHERE parent_user=%s OR username=%s", (user, user))
+        users_list = c.fetchall()
+        conn.close()
+        content = Template(USERS_CONTENT).render(username=user, draw_date=draw, users_list=users_list)
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content, msg=msg)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@app.post("/save-user-level")
+def save_user_level(user: str = Form(...), draw: str = Form(...), new_username: str = Form(...), new_password: str = Form(...), new_role: str = Form(...)):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("INSERT INTO Users (username, password, role, parent_user) VALUES (%s, %s, %s, %s)", (new_username, new_password, new_role, user))
+        conn.commit()
+        conn.close()
+    except: pass
+    return RedirectResponse(url=f"/users?user={user}&draw={draw}&msg=สร้างสมาชิกใหม่สำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/logout")
 def logout():
