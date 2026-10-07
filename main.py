@@ -368,17 +368,17 @@ AUDIT_ALL_CONTENT = """
         <table class="table table-striped table-bordered table-hover text-center align-middle" style="font-size: 0.95rem;">
             <thead class="table-dark">
                 <tr>
-                    <th>ลำดับ</th>
+                    <th>ลำดับที่</th>
                     <th>งวดวันที่</th>
-                    <th>เวลาบันทึก</th>
-                    <th>เลขที่บิล</th>
-                    <th>ผู้คีย์โพย (Agent/Owner)</th>
-                    <th>ชื่อลูกค้า</th>
-                    <th>ประเภท</th>
-                    <th>หมายเลข</th>
-                    <th>ยอดซื้อ</th>
+                    <th>เวลาทำรายการ</th>
+                    <th>เลขที่ใบเสร็จ</th>
+                    <th>ผู้บันทึกโพย (ผู้ดูแล/เอเย่นต์)</th>
+                    <th>ชื่อลูกค้า / สมาชิก</th>
+                    <th>ประเภทหวย</th>
+                    <th>หมายเลขที่ซื้อ</th>
+                    <th>ยอดซื้อ (บาท)</th>
                     <th>อัตราจ่าย</th>
-                    <th>ยอดสุทธิ</th>
+                    <th>ยอดซื้อสุทธิ (บาท)</th>
                 </tr>
             </thead>
             <tbody>
@@ -917,7 +917,6 @@ def audit_all_page(user: str, draw: str):
             conn.close()
             return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
 
-        # ดึงข้อมูล Transactions ทั้งหมดในงวด โดยรองรับทั้งรูปแบบวันที่ตรงกันหรือมีคำว่า งวด พ่วงอยู่
         c.execute("SELECT * FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) ORDER BY id DESC", (draw, f"%{draw}%"))
         audit_rows = c.fetchall()
         conn.close()
@@ -1002,13 +1001,21 @@ def results_page(user: str, draw: str):
             conn.close()
             return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
 
-        # ดึงผลรางวัลของงวดนี้
+        # ดึงผลรางวัลของงวดนี้และตัดช่องว่าง
         c.execute("SELECT prize_1, bottom_2 FROM DrawResults WHERE draw_date = %s OR draw_date ILIKE %s", (draw, f"%{draw}%"))
         res = c.fetchone()
-        prize_1 = res[0] if res else ""
-        bottom_2 = res[1] if res else ""
+        prize_1 = str(res[0]).strip() if res and res[0] else ""
+        bottom_2 = str(res[1]).strip() if res and res[1] else ""
 
-        # คำนวณยอดรวมทั้งระบบแบบครอบคลุมทุกลูกค้าและทุกสายงาน
+        # โหลดรายการเลขอั้นจ่ายครึ่งของงวดนี้มาตรวจสอบ
+        c.execute("SELECT raw_num, status FROM BlockedNumbers WHERE draw_date = %s OR draw_date ILIKE %s", (draw, f"%{draw}%"))
+        block_rows = c.fetchall()
+        half_pay_numbers = set()
+        for b_num, b_status in block_rows:
+            if b_status != "ปิดรับ" and b_num:
+                half_pay_numbers.add(str(b_num).strip())
+
+        # คำนวณยอดรวมทั้งระบบแบบครอบคลุม
         c.execute("SELECT SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
         sales_res = c.fetchone()
         total_sales = float(sales_res[0] or 0) if sales_res and sales_res[0] else 0.0
@@ -1026,19 +1033,26 @@ def results_page(user: str, draw: str):
             payout = 0.0
             amt_val = float(amt or 0)
             rate_val = float(rate or 0) if rate else 0.0
+            clean_num = str(num).strip()
+            clean_type = str(ttype).strip()
             
-            # ตรวจสอบเงื่อนไขการถูกรางวัลแต่ละประเภท
-            if ttype == "3ตัวตรง" and num == prize_1:
+            # ตรวจสอบเงื่อนไขการถูกรางวัลแต่ละประเภท (รองรับการตัดช่องว่าง)
+            if clean_type == "3ตัวตรง" and prize_1 and clean_num == prize_1:
                 payout = amt_val * rate_val
-            elif ttype == "3ตัวโต๊ด" and prize_1 and sorted(num) == sorted(prize_1) and num != prize_1:
+            elif clean_type == "3ตัวโต๊ด" and prize_1 and sorted(clean_num) == sorted(prize_1) and clean_num != prize_1:
                 payout = amt_val * rate_val
-            elif ttype == "2ตัวบน" and prize_1 and num == prize_1[-2:]:
+            elif clean_type == "2ตัวบน" and prize_1 and len(prize_1) >= 2 and clean_num == prize_1[-2:]:
                 payout = amt_val * rate_val
-            elif ttype == "2ตัวล่าง" and bottom_2 and num == bottom_2:
+            elif clean_type == "2ตัวล่าง" and bottom_2 and clean_num == bottom_2:
                 payout = amt_val * rate_val
             
+            # หากหมายเลขนี้เป็นเลขอั้นจ่ายครึ่ง (อยู่ใน BlockedNumbers และไม่ใช่สถานะปิดรับ) ให้หารอัตราจ่ายลงครึ่งหนึ่ง
+            if payout > 0 and clean_num in half_pay_numbers:
+                rate_val = rate_val / 2.0
+                payout = amt_val * rate_val
+
             if payout > 0:
-                winners.append((cname, uname, num, ttype, amt_val, rate_val, payout))
+                winners.append((cname, uname, clean_num, clean_type, amt_val, rate_val, payout))
                 total_payout += payout
 
         conn.close()
@@ -1056,7 +1070,7 @@ def save_results(user: str = Form(...), draw: str = Form(...), prize_1: str = Fo
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("INSERT INTO DrawResults (draw_date, prize_1, bottom_2) VALUES (%s, %s, %s) ON CONFLICT (draw_date) DO UPDATE SET prize_1=EXCLUDED.prize_1, bottom_2=EXCLUDED.bottom_2", (draw, prize_1, bottom_2))
+        c.execute("INSERT INTO DrawResults (draw_date, prize_1, bottom_2) VALUES (%s, %s, %s) ON CONFLICT (draw_date) DO UPDATE SET prize_1=EXCLUDED.prize_1, bottom_2=EXCLUDED.bottom_2", (draw.strip(), prize_1.strip(), bottom_2.strip()))
         conn.commit()
         conn.close()
     except: pass
