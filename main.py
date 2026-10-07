@@ -12,7 +12,6 @@ DB_URI = "postgresql://postgres.mpyswshlrxwpirzdexrn:Clublifekorat3888@aws-0-ap-
 def connect_db():
     return psycopg2.connect(DB_URI)
 
-# ตรวจสอบและสร้าง/อัปเดตโครงสร้างตารางและคอลัมน์อัตโนมัติป้องกัน Error 100%
 @app.on_event("startup")
 def startup_db():
     try:
@@ -42,7 +41,6 @@ def startup_db():
                 status TEXT DEFAULT 'ปกติ'
             );
         """)
-        # ตรวจสอบเผื่อกรณีตาราง TempDraft มีอยู่แล้วแต่ยังขาดคอลัมน์ status
         c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ปกติ';")
         c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS amt_teng NUMERIC DEFAULT 0;")
         c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS amt_tod NUMERIC DEFAULT 0;")
@@ -92,6 +90,7 @@ LAYOUT = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lotto ERP - ระบบบริหารจัดการหวย</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         body { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow-x: hidden; }
         .top-navbar { background-color: #1a1a1a; color: white; padding: 8px 15px; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #ffc107; }
@@ -130,11 +129,14 @@ LAYOUT = """
         <div class="top-nav-links">
             <a href="/dashboard?user={{ username }}&draw={{ draw_date }}">📊 แดชบอร์ด</a>
             <a href="/buy?user={{ username }}&draw={{ draw_date }}">🛒 บันทึกโพย</a>
+            {% if role == 'Admin' %}
             <a href="/block?user={{ username }}&draw={{ draw_date }}">🚫 จัดการเลขอั้น</a>
-            <a href="/password?user={{ username }}&draw={{ draw_date }}">⚙ ตั้งค่าเริ่มต้น</a>
-            <a href="/excel-ledger?user={{ username }}&draw={{ draw_date }}">ฐานข้อมูล</a>
-            <a href="/customers?user={{ username }}&draw={{ draw_date }}">👥 จัดการลูกค้า</a>
+            <a href="/results?user={{ username }}&draw={{ draw_date }}">🏆 ออกผลรางวัล</a>
             <a href="/risk?user={{ username }}&draw={{ draw_date }}">⚠ ความเสี่ยง</a>
+            <a href="/excel-ledger?user={{ username }}&draw={{ draw_date }}">ฐานข้อมูล</a>
+            {% endif %}
+            <a href="/password?user={{ username }}&draw={{ draw_date }}">⚙ ตั้งค่าเริ่มต้น</a>
+            <a href="/customers?user={{ username }}&draw={{ draw_date }}">👥 จัดการลูกค้า</a>
         </div>
         <div class="d-flex align-items-center gap-3">
             <span id="live-clock" class="text-info fw-bold font-monospace">กำลังโหลด...</span>
@@ -155,9 +157,16 @@ LAYOUT = """
             </div>
 
             <div class="sidebar-section-title">จัดการผู้ใช้</div>
-            <a href="/users?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ Master</a>
-            <a href="/users?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ เอเย่นต์</a>
-            <a href="/users?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ สมาชิก</a>
+            {% if role == 'Admin' %}
+                <a href="/users?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ Master</a>
+                <a href="/users?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ เอเย่นต์</a>
+                <a href="/users?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ สมาชิก</a>
+            {% elif role == 'Master Agent' %}
+                <a href="/users?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ เอเย่นต์</a>
+                <a href="/users?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ สมาชิก</a>
+            {% elif role == 'Agent' %}
+                <a href="/users?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ สมาชิก</a>
+            {% endif %}
 
             <div class="sidebar-section-title">แทงหวย</div>
             <a href="/campaigns?user={{ username }}" class="sidebar-menu-item">▶ หวยรัฐบาล</a>
@@ -402,7 +411,7 @@ EXCEL_LEDGER_CONTENT = """
 
 DASHBOARD_CONTENT = """
 <div class="card shadow p-4">
-    <h2 class="text-primary mb-4 fw-bold">📊 สรุปยอดขายรวมประจำงวด</h2>
+    <h2 class="text-primary mb-4 fw-bold">📊 สรุปยอดขายรวมประจำงวด (สายงานของคุณ)</h2>
     <div class="row text-center mb-4">
         <div class="col-md-6 mb-3">
             <div class="p-3 bg-warning text-dark rounded shadow fw-bold fs-4 border">ยอดรวม 2 ตัว: ฿{{ "{:,.2f}".format(tot_2d) }}</div>
@@ -411,7 +420,7 @@ DASHBOARD_CONTENT = """
             <div class="p-3 bg-warning text-dark rounded shadow fw-bold fs-4 border">ยอดรวม 3 ตัว: ฿{{ "{:,.2f}".format(tot_3d) }}</div>
         </div>
     </div>
-    <h4 class="mb-3 fw-bold text-dark">รายละเอียดหมายเลขที่มียอดซื้อ</h4>
+    <h4 class="mb-3 fw-bold text-dark">รายละเอียดหมายเลขที่มียอดซื้อในสายงาน</h4>
     <div class="table-responsive">
         <table class="table table-striped table-bordered text-center align-middle">
             <thead class="table-dark">
@@ -423,7 +432,7 @@ DASHBOARD_CONTENT = """
                     <td>{{ r[0] }}</td><td><b>{{ r[1] }}</b></td><td>{{ "{:,.2f}".format(r[2] or 0) }}</td><td>{{ r[3] }}</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="4" class="text-muted">ยังไม่มีรายการซื้อในงวดนี้</td></tr>
+                <tr><td colspan="4" class="text-muted">ยังไม่มีรายการซื้อในสายงานของคุณสำหรับงวดนี้</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -492,7 +501,7 @@ RISK_CONTENT = """
 
 RESULTS_CONTENT = """
 <div class="card shadow p-4 mb-4">
-    <h2 class="text-success mb-3 fw-bold">🏆 บันทึกผลการออกรางวัลประจำงวด</h2>
+    <h2 class="text-success mb-3 fw-bold">🏆 บันทึกผลการออกรางวัลประจำงวด (Admin Master)</h2>
     <form method="POST" action="/save-results" class="row g-3">
         <input type="hidden" name="user" value="{{ username }}">
         <input type="hidden" name="draw" value="{{ draw_date }}">
@@ -505,36 +514,36 @@ RESULTS_CONTENT = """
             <input type="text" name="bottom_2" class="form-control form-control-lg" value="{{ bottom_2 }}" placeholder="เช่น 45" required>
         </div>
         <div class="col-12">
-            <button type="submit" class="btn btn-success btn-lg w-100 fw-bold">💾 บันทึกผลรางวัลและคำนวณสรุปยอด</button>
+            <button type="submit" class="btn btn-success btn-lg w-100 fw-bold">💾 บันทึกผลรางวัลและคำนวณสรุปผลภาพรวม</button>
         </div>
     </form>
 </div>
 
 <div class="card shadow p-4">
-    <h3 class="text-primary mb-3 fw-bold">📊 สรุปผลกำไร / ขาดทุน และรายงานผลรางวัล</h3>
+    <h3 class="text-primary mb-3 fw-bold">📊 รายงานสรุปผลรางวัลและกำไร / ขาดทุนสุทธิ</h3>
     <div class="row text-center mb-4">
-        <div class="col-md-4 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>ยอดขายรวม</h5><h3 class="text-dark fw-bold">฿{{ "{:,.2f}".format(total_sales) }}</h3></div></div>
+        <div class="col-md-4 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>ยอดขายรวมทั้งระบบ</h5><h3 class="text-dark fw-bold">฿{{ "{:,.2f}".format(total_sales) }}</h3></div></div>
         <div class="col-md-4 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>หักส่วนลดรวม</h5><h3 class="text-danger fw-bold">฿{{ "{:,.2f}".format(total_discount) }}</h3></div></div>
-        <div class="col-md-4 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>ยอดขายสุทธิ (คงเหลือ)</h5><h3 class="text-primary fw-bold">฿{{ "{:,.2f}".format(total_net) }}</h3></div></div>
+        <div class="col-md-4 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>ยอดขายสุทธิ</h5><h3 class="text-primary fw-bold">฿{{ "{:,.2f}".format(total_net) }}</h3></div></div>
     </div>
     <div class="row text-center mb-4">
         <div class="col-md-6 mb-2"><div class="p-3 bg-white border rounded shadow-sm"><h5>จ่ายเงินรางวัลรวม</h5><h3 class="text-danger fw-bold">฿{{ "{:,.2f}".format(total_payout) }}</h3></div></div>
-        <div class="col-md-6 mb-2"><div class="p-3 bg-warning text-dark border rounded shadow-sm"><h5>กำไร / ขาดทุนสุทธิ</h5><h3 class="fw-bold">฿{{ "{:,.2f}".format(total_net - total_payout) }}</h3></div></div>
+        <div class="col-md-6 mb-2"><div class="p-3 bg-warning text-dark border rounded shadow-sm"><h5>กำไร / ขาดทุนสุทธิ (Net Profit)</h5><h3 class="fw-bold">฿{{ "{:,.2f}".format(total_net - total_payout) }}</h3></div></div>
     </div>
 
-    <h4 class="mt-4 mb-3 fw-bold text-dark">รายชื่อผู้ถูกรางวัลในงวดนี้</h4>
+    <h4 class="mt-4 mb-3 fw-bold text-dark">รายชื่อผู้ถูกรางวัลทั้งหมดในงวดนี้</h4>
     <div class="table-responsive">
         <table class="table table-striped table-bordered text-center align-middle">
             <thead class="table-dark">
-                <tr><th>ผู้ซื้อ / ลูกค้า</th><th>เลขที่ซื้อ</th><th>ประเภท</th><th>ยอดซื้อ</th><th>เงินรางวัลที่ได้รับ</th></tr>
+                <tr><th>ผู้ซื้อ / ลูกค้า</th><th>เลขที่ซื้อ</th><th>ประเภท</th><th>ยอดซื้อ</th><th>อัตราจ่าย</th><th>เงินรางวัลที่ได้รับ</th></tr>
             </thead>
             <tbody>
                 {% for w in winners %}
                 <tr>
-                    <td>{{ w[0] }}</td><td><b>{{ w[1] }}</b></td><td>{{ w[2] }}</td><td>{{ "{:,.2f}".format(w[3] or 0) }}</td><td class="text-success fw-bold">฿{{ "{:,.2f}".format(w[4] or 0) }}</td>
+                    <td>{{ w[0] }}</td><td><b>{{ w[1] }}</b></td><td>{{ w[2] }}</td><td>{{ "{:,.2f}".format(w[3] or 0) }}</td><td>{{ w[4] }}</td><td class="text-success fw-bold">฿{{ "{:,.2f}".format(w[5] or 0) }}</td>
                 </tr>
                 {% else %}
-                <tr><td colspan="5" class="text-muted">ยังไม่มีผู้ถูกรางวัล หรือยังไม่ได้บันทึกผลรางวัล</td></tr>
+                <tr><td colspan="6" class="text-muted">ยังไม่มีผู้ถูกรางวัล หรือยังไม่ได้บันทึกผลรางวัล</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -646,7 +655,7 @@ USERS_CONTENT = """
 <div class="row">
     <div class="col-md-4 mb-4">
         <div class="card shadow p-4">
-            <h4 class="text-success mb-3 fw-bold">⚙️ สร้างสายงานสมาชิก (4 ระดับ)</h4>
+            <h4 class="text-success mb-3 fw-bold">⚙️ สร้างสายงานสมาชิก</h4>
             <form method="POST" action="/save-user-level">
                 <input type="hidden" name="user" value="{{ username }}">
                 <input type="hidden" name="draw" value="{{ draw_date }}">
@@ -656,15 +665,41 @@ USERS_CONTENT = """
                 </div>
                 <div class="mb-3">
                     <label class="form-label fw-bold text-dark">Password:</label>
-                    <input type="password" name="new_password" class="form-control" required>
+                    <div class="input-group">
+                        <input type="password" name="new_password" id="newPasswordInput" class="form-control" required>
+                        <button class="btn btn-outline-secondary" type="button" onclick="togglePassword()">
+                            <i class="fa-solid fa-eye" id="eyeIcon"></i>
+                        </button>
+                    </div>
                 </div>
+                <script>
+                    function togglePassword() {
+                        const pwd = document.getElementById('newPasswordInput');
+                        const icon = document.getElementById('eyeIcon');
+                        if (pwd.type === 'password') {
+                            pwd.type = 'text';
+                            icon.classList.remove('fa-eye');
+                            icon.classList.add('fa-eye-slash');
+                        } else {
+                            pwd.type = 'password';
+                            icon.classList.remove('fa-eye-slash');
+                            icon.classList.add('fa-eye');
+                        }
+                    }
+                </script>
                 <div class="mb-3">
                     <label class="form-label fw-bold text-dark">ระดับสิทธิ์ (Role):</label>
                     <select name="new_role" class="form-select">
-                        <option value="Admin">Admin</option>
-                        <option value="Master Agent">Master Agent</option>
-                        <option value="Agent">Agent</option>
-                        <option value="Member">Member</option>
+                        {% if role == 'Admin' %}
+                            <option value="Master Agent">Master Agent</option>
+                            <option value="Agent">Agent</option>
+                            <option value="Member">Member</option>
+                        {% elif role == 'Master Agent' %}
+                            <option value="Agent">Agent</option>
+                            <option value="Member">Member</option>
+                        {% elif role == 'Agent' %}
+                            <option value="Member">Member</option>
+                        {% endif %}
                     </select>
                 </div>
                 <button type="submit" class="btn btn-success w-100 fw-bold">บันทึกสมาชิกใหม่</button>
@@ -673,22 +708,27 @@ USERS_CONTENT = """
     </div>
     <div class="col-md-8">
         <div class="card shadow p-4">
-            <h4 class="text-primary mb-3 fw-bold">🗂️ รายชื่อสมาชิกใต้สายงาน</h4>
+            <h4 class="text-primary mb-3 fw-bold">🗂️ รายชื่อสมาชิกใต้สายงาน (ดับเบิลคลิกเพื่อเจาะลึกสายงาน)</h4>
             <div class="table-responsive">
-                <table class="table table-striped table-bordered text-center align-middle">
+                <table class="table table-striped table-bordered table-hover text-center align-middle">
                     <thead class="table-dark">
-                        <tr><th>ID</th><th>Username</th><th>ระดับสิทธิ์</th><th>ผู้ดูแล (Parent)</th></tr>
+                        <tr><th>ID</th><th>Username</th><th>Password</th><th>ระดับสิทธิ์</th><th>ผู้ดูแล (Parent)</th></tr>
                     </thead>
                     <tbody>
                         {% for u in users_list %}
-                        <tr>
-                            <td>{{ u[0] }}</td><td><b>{{ u[1] }}</b></td><td><span class="badge bg-secondary">{{ u[2] }}</span></td><td>{{ u[3] }}</td>
+                        <tr ondblclick="window.location.href='/users?user={{ u[1] }}&draw={{ draw_date }}'" style="cursor: pointer;" title="ดับเบิลคลิกเพื่อเจาะลึกสายงานของ {{ u[1] }}">
+                            <td>{{ u[0] }}</td>
+                            <td><b>{{ u[1] }}</b></td>
+                            <td><code>{{ u[4] }}</code></td>
+                            <td><span class="badge bg-secondary">{{ u[2] }}</span></td>
+                            <td>{{ u[3] }}</td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="4" class="text-muted">ยังไม่มีสมาชิกในสายงาน</td></tr>
+                        <tr><td colspan="5" class="text-muted">ยังไม่มีสมาชิกในสายงาน</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
+                <div class="form-text text-muted">💡 เคล็ดลับ: ดับเบิลคลิกที่แถวของสมาชิกเพื่อเปิดดูมุมมองสายงานใต้สังกัดของสมาชิกท่านนั้นๆ</div>
             </div>
         </div>
     </div>
@@ -815,7 +855,7 @@ def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
 
         c.execute("SELECT id, name, 'Customer' FROM Customers WHERE owner_username=%s", (user,))
         custs = c.fetchall()
-        if not custs:
+        if not custs and role == 'Admin':
             c.execute("SELECT id, name, 'Customer' FROM Customers")
             custs = c.fetchall()
             
@@ -956,6 +996,10 @@ def excel_ledger_page(user: str, draw: str):
         c = conn.cursor()
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
         role = c.fetchone()[0]
+        if role != 'Admin':
+            conn.close()
+            return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
+
         c.execute("SELECT bill_no, timestamp, customer_name, username, type, num, amount, payout_rate, discount, net, status FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) ORDER BY id DESC", (draw, f"%{draw}%"))
         ledger_rows = c.fetchall()
         conn.close()
@@ -973,14 +1017,22 @@ def dashboard_page(user: str, draw: str):
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
         role = c.fetchone()[0]
 
-        c.execute("SELECT type, SUM(amount) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY type", (draw, f"%{draw}%"))
+        if role == 'Admin':
+            c.execute("SELECT type, SUM(amount) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY type", (draw, f"%{draw}%"))
+        else:
+            c.execute("SELECT type, SUM(amount) FROM Transactions WHERE ((draw_date = %s OR draw_date ILIKE %s) AND username = %s) GROUP BY type", (draw, f"%{draw}%", user))
+        
         data = {"2ตัวบน":0, "2ตัวล่าง":0, "3ตัวตรง":0, "3ตัวโต๊ด":0}
         for t, amt in c.fetchall():
             if t in data: data[t] = float(amt or 0)
         tot_2d = data["2ตัวบน"] + data["2ตัวล่าง"]
         tot_3d = data["3ตัวตรง"] + data["3ตัวโต๊ด"]
         
-        c.execute("SELECT type, num, SUM(amount), STRING_AGG(DISTINCT customer_name, ', ') FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY type, num ORDER BY SUM(amount) DESC", (draw, f"%{draw}%"))
+        if role == 'Admin':
+            c.execute("SELECT type, num, SUM(amount), STRING_AGG(DISTINCT customer_name, ', ') FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY type, num ORDER BY SUM(amount) DESC", (draw, f"%{draw}%"))
+        else:
+            c.execute("SELECT type, num, SUM(amount), STRING_AGG(DISTINCT customer_name, ', ') FROM Transactions WHERE ((draw_date = %s OR draw_date ILIKE %s) AND username = %s) GROUP BY type, num ORDER BY SUM(amount) DESC", (draw, f"%{draw}%", user))
+        
         dash_rows = c.fetchall()
         conn.close()
 
@@ -997,13 +1049,21 @@ def reports_page(user: str, draw: str):
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
         role = c.fetchone()[0]
 
-        c.execute("SELECT SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
+        if role == 'Admin':
+            c.execute("SELECT SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
+        else:
+            c.execute("SELECT SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE ((draw_date = %s OR draw_date ILIKE %s) AND username = %s)", (draw, f"%{draw}%", user))
+        
         res = c.fetchone()
-        rep_total_sales = float(res[0] or 0)
-        rep_total_disc = float(res[1] or 0)
-        rep_total_net = float(res[2] or 0)
+        rep_total_sales = float(res[0] or 0) if res and res[0] else 0.0
+        rep_total_disc = float(res[1] or 0) if res and res[1] else 0.0
+        rep_total_net = float(res[2] or 0) if res and res[2] else 0.0
 
-        c.execute("SELECT customer_name, COUNT(DISTINCT bill_no), SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY customer_name", (draw, f"%{draw}%"))
+        if role == 'Admin':
+            c.execute("SELECT customer_name, COUNT(DISTINCT bill_no), SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY customer_name", (draw, f"%{draw}%"))
+        else:
+            c.execute("SELECT customer_name, COUNT(DISTINCT bill_no), SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE ((draw_date = %s OR draw_date ILIKE %s) AND username = %s) GROUP BY customer_name", (draw, f"%{draw}%", user))
+        
         rep_customers = c.fetchall()
         conn.close()
 
@@ -1019,6 +1079,9 @@ def risk_page(user: str, draw: str):
         c = conn.cursor()
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
         role = c.fetchone()[0]
+        if role != 'Admin':
+            conn.close()
+            return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
 
         c.execute("SELECT type, num, SUM(amount) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY type, num ORDER BY SUM(amount) DESC", (draw, f"%{draw}%"))
         risk_rows = c.fetchall()
@@ -1036,6 +1099,9 @@ def results_page(user: str, draw: str):
         c = conn.cursor()
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
         role = c.fetchone()[0]
+        if role != 'Admin':
+            conn.close()
+            return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
 
         c.execute("SELECT prize_1, bottom_2 FROM DrawResults WHERE draw_date = %s", (draw,))
         res = c.fetchone()
@@ -1044,9 +1110,9 @@ def results_page(user: str, draw: str):
 
         c.execute("SELECT SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
         sales_res = c.fetchone()
-        total_sales = float(sales_res[0] or 0)
-        total_discount = float(sales_res[1] or 0)
-        total_net = float(sales_res[2] or 0)
+        total_sales = float(sales_res[0] or 0) if sales_res and sales_res[0] else 0.0
+        total_discount = float(sales_res[1] or 0) if sales_res and sales_res[1] else 0.0
+        total_net = float(sales_res[2] or 0) if sales_res and sales_res[2] else 0.0
 
         winners = []
         total_payout = 0.0
@@ -1056,7 +1122,7 @@ def results_page(user: str, draw: str):
             for cname, num, ttype, amt, rate in txs:
                 payout = 0.0
                 amt_val = float(amt or 0)
-                rate_val = float(rate or 0)
+                rate_val = float(rate or 0) if rate else 0.0
                 if ttype == "3ตัวตรง" and num == prize_1:
                     payout = amt_val * rate_val
                 elif ttype == "3ตัวโต๊ด" and sorted(num) == sorted(prize_1) and num != prize_1:
@@ -1067,13 +1133,14 @@ def results_page(user: str, draw: str):
                     payout = amt_val * rate_val
                 
                 if payout > 0:
-                    winners.append((cname, num, ttype, amt_val, payout))
+                    winners.append((cname, num, ttype, amt_val, rate_val, payout))
                     total_payout += payout
 
         conn.close()
         content = Template(RESULTS_CONTENT).render(
-            prize_1=prize_1, bottom_2=bottom_2, total_sales=total_sales, 
-            total_discount=total_discount, total_net=total_net, winners=winners, total_payout=total_payout
+            username=user, draw_date=draw, prize_1=prize_1, bottom_2=bottom_2, 
+            total_sales=total_sales, total_discount=total_discount, total_net=total_net, 
+            winners=winners, total_payout=total_payout
         )
         return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
     except Exception as e:
@@ -1097,6 +1164,10 @@ def block_page(user: str, draw: str, msg: str = None):
         c = conn.cursor()
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
         role = c.fetchone()[0]
+        if role != 'Admin':
+            conn.close()
+            return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
+
         c.execute("SELECT id, perm_num, type, status FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s) ORDER BY id DESC", (draw, f"%{draw}%"))
         blocks = c.fetchall()
         conn.close()
@@ -1141,7 +1212,7 @@ def customers_page(user: str, draw: str, msg: str = None):
         role = c.fetchone()[0]
         c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d FROM Customers WHERE owner_username=%s", (user,))
         custs_list = c.fetchall()
-        if not custs_list:
+        if not custs_list and role == 'Admin':
             c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d FROM Customers")
             custs_list = c.fetchall()
         conn.close()
@@ -1168,11 +1239,16 @@ def users_page(user: str, draw: str, msg: str = None):
         conn = connect_db()
         c = conn.cursor()
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
-        role = c.fetchone()[0]
-        c.execute("SELECT id, username, role, parent_user FROM Users WHERE parent_user=%s OR username=%s", (user, user))
+        role_res = c.fetchone()
+        role = role_res[0] if role_res else "Member"
+
+        # รองรับการเจาะลึกสายงาน (ถ้ามีการคลิกดูรายชื่อใต้สังกัด)
+        target_user = user
+        c.execute("SELECT id, username, role, parent_user, password FROM Users WHERE parent_user=%s OR username=%s", (target_user, target_user))
         users_list = c.fetchall()
         conn.close()
-        content = Template(USERS_CONTENT).render(username=user, draw_date=draw, users_list=users_list)
+
+        content = Template(USERS_CONTENT).render(username=user, role=role, draw_date=draw, users_list=users_list)
         return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content, msg=msg)
     except Exception as e:
         return f"Error: {str(e)}"
