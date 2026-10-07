@@ -17,6 +17,23 @@ def startup_db():
     try:
         conn = connect_db()
         c = conn.cursor()
+        
+        # สร้างตาราง Customers พร้อมรองรับฟิลด์ส่วนลดและอัตราจ่ายอย่างครบถ้วนชัดเจน
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS Customers (
+                id SERIAL PRIMARY KEY,
+                name TEXT,
+                owner_username TEXT,
+                discount_type INTEGER DEFAULT 1,
+                disc_total NUMERIC DEFAULT 0,
+                disc_3d NUMERIC DEFAULT 0,
+                disc_2d NUMERIC DEFAULT 0,
+                pay_3d NUMERIC DEFAULT 500,
+                pay_3tod NUMERIC DEFAULT 100,
+                pay_2d NUMERIC DEFAULT 70
+            );
+        """)
+
         c.execute("""
             CREATE TABLE IF NOT EXISTS LotteryCampaigns (
                 id SERIAL PRIMARY KEY,
@@ -76,8 +93,10 @@ def startup_db():
             );
         """)
         
+        # ตรวจสอบและเพิ่มคอลัมน์ส่วนลดแยก 3 ตัวและ 2 ตัวในตาราง Customers เสมอ
         c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_3d NUMERIC DEFAULT 0;")
         c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_2d NUMERIC DEFAULT 0;")
+        c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_total NUMERIC DEFAULT 0;")
         
         conn.commit()
         conn.close()
@@ -573,7 +592,7 @@ RESULTS_CONTENT = """
         </table>
     </div>
 
-    <!-- ตารางเพิ่มเติมตามที่ผู้ใช้ต้องการ -->
+    <!-- ตารางรายละเอียดยอดขายแยกตามลูกค้า -->
     <h4 class="mt-5 mb-3 fw-bold text-dark">📋 รายละเอียดยอดขายรวมแยกตามรายชื่อลูกค้า / ผู้ซื้อ</h4>
     <div class="table-responsive mb-5">
         <table class="table table-striped table-bordered text-center align-middle">
@@ -647,11 +666,11 @@ CUSTOMER_CONTENT = """
                     </div>
                     <div class="mb-3">
                         <label class="form-label fw-bold text-dark">ส่วนลดรวม (%):</label>
-                        <input type="number" step="0.01" name="disc_total" class="form-control" value="{{ edit_customer[2] or 0 }}">
+                        <input type="number" step="0.01" name="disc_total" class="form-control" value="{{ edit_customer[2] if edit_customer[2] is not none else 0 }}">
                     </div>
                     <div class="row mb-3">
-                        <div class="col"><label class="form-label text-dark small">ส่วนลด 3 ตัว (%):</label><input type="number" step="0.01" name="disc_3d" class="form-control" value="{{ edit_customer[6] or 0 }}"></div>
-                        <div class="col"><label class="form-label text-dark small">ส่วนลด 2 ตัว (%):</label><input type="number" step="0.01" name="disc_2d" class="form-control" value="{{ edit_customer[7] or 0 }}"></div>
+                        <div class="col"><label class="form-label text-dark small">ส่วนลด 3 ตัว (%):</label><input type="number" step="0.01" name="disc_3d" class="form-control" value="{{ edit_customer[6] if edit_customer[6] is not none else 0 }}"></div>
+                        <div class="col"><label class="form-label text-dark small">ส่วนลด 2 ตัว (%):</label><input type="number" step="0.01" name="disc_2d" class="form-control" value="{{ edit_customer[7] if edit_customer[7] is not none else 0 }}"></div>
                     </div>
                     <div class="row mb-3">
                         <div class="col"><label class="form-label text-dark">จ่าย 3 ตรง:</label><input type="number" step="0.01" name="pay_3d" class="form-control" value="{{ edit_customer[3] or 500 }}"></div>
@@ -705,7 +724,7 @@ CUSTOMER_CONTENT = """
                         <tr>
                             <td>{{ c[0] }}</td>
                             <td><b>{{ c[1] }}</b></td>
-                            <td>{{ c[2] }}%</td>
+                            <td>{{ c[2] or 0 }}%</td>
                             <td><span class="text-danger fw-bold">{{ c[6] or 0 }}%</span></td>
                             <td><span class="text-danger fw-bold">{{ c[7] or 0 }}%</span></td>
                             <td>{{ c[3] }}</td>
@@ -996,9 +1015,9 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
                 pay_3d = float(res[0]) if res[0] is not None and float(res[0]) > 0 else 500.0
                 pay_3tod = float(res[1]) if res[1] is not None and float(res[1]) > 0 else 100.0
                 pay_2d = float(res[2]) if res[2] is not None and float(res[2]) > 0 else 70.0
-                disc_total = float(res[3] or 0)
-                disc_3d = float(res[4] or 0)
-                disc_2d = float(res[5] or 0)
+                disc_total = float(res[3]) if res[3] is not None else 0.0
+                disc_3d = float(res[4]) if res[4] is not None else 0.0
+                disc_2d = float(res[5]) if res[5] is not None else 0.0
 
         hold_nums = []
         for block in blocks:
@@ -1263,11 +1282,10 @@ def results_page(user: str, draw: str):
                 winners.append((cname, uname, clean_num, clean_type, amt_val, rate_val, payout))
                 total_payout += payout
 
-        # ดึงข้อมูลสำหรับตารางสรุปยอดขายแยกตามรายชื่อลูกค้า
+        # ดึงข้อมูลยอดขายและส่วนลดแยกตามรายชื่อลูกค้าจาก Transactions จริง
         c.execute("SELECT customer_name, username, COUNT(DISTINCT bill_no), SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY customer_name, username", (draw, f"%{draw}%"))
         sales_breakdown = c.fetchall()
 
-        # ดึงข้อมูลสำหรับตารางสรุปส่วนลดแยกตามรายชื่อลูกค้า
         c.execute("SELECT customer_name, username, SUM(amount), SUM(discount) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY customer_name, username", (draw, f"%{draw}%"))
         discount_breakdown = c.fetchall()
 
