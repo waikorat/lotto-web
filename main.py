@@ -911,7 +911,8 @@ def audit_all_page(user: str, draw: str):
         conn = connect_db()
         c = conn.cursor()
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
-        role = c.fetchone()[0]
+        role_res = c.fetchone()
+        role = role_res[0] if role_res else "Member"
         if role != 'Admin':
             conn.close()
             return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
@@ -994,7 +995,8 @@ def results_page(user: str, draw: str):
         conn = connect_db()
         c = conn.cursor()
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
-        role = c.fetchone()[0]
+        role_res = c.fetchone()
+        role = role_res[0] if role_res else "Member"
         if role != 'Admin':
             conn.close()
             return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
@@ -1137,7 +1139,7 @@ def update_password(user: str = Form(...), draw: str = Form(...), old_password: 
         c.execute("SELECT id FROM Users WHERE username=%s AND password=%s", (user, old_password))
         if not c.fetchone():
             conn.close()
-            return RedirectResponse(url=f"/password?user={user}&draw={{draw}}&error=รหัสผ่านปัจจุบันไม่ถูกต้อง!", status_code=status.HTTP_303_SEE_OTHER)
+            return RedirectResponse(url=f"/password?user={user}&draw={draw}&error=รหัสผ่านปัจจุบันไม่ถูกต้อง!", status_code=status.HTTP_303_SEE_OTHER)
         c.execute("UPDATE Users SET password=%s WHERE username=%s", (new_password, user))
         conn.commit()
         conn.close()
