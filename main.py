@@ -556,7 +556,7 @@ RESULTS_CONTENT = """
     </div>
 
     <h4 class="mt-4 mb-3 fw-bold text-dark">รายชื่อผู้ถูกรางวัลทั้งหมดในงวดนี้ (รวมทุกลูกค้าและทุกสายงาน)</h4>
-    <div class="table-responsive">
+    <div class="table-responsive mb-5">
         <table class="table table-striped table-bordered text-center align-middle">
             <thead class="table-dark">
                 <tr><th>ผู้ซื้อ / ลูกค้า</th><th>ผู้บันทึก (Agent)</th><th>เลขที่ซื้อ</th><th>ประเภท</th><th>ยอดซื้อ</th><th>อัตราจ่าย</th><th>เงินรางวัลที่ได้รับ</th></tr>
@@ -568,6 +568,62 @@ RESULTS_CONTENT = """
                 </tr>
                 {% else %}
                 <tr><td colspan="7" class="text-muted">ยังไม่มีผู้ถูกรางวัล หรือยังไม่ได้บันทึกผลรางวัล</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- ตารางเพิ่มเติมตามที่ผู้ใช้ต้องการ -->
+    <h4 class="mt-5 mb-3 fw-bold text-dark">📋 รายละเอียดยอดขายรวมแยกตามรายชื่อลูกค้า / ผู้ซื้อ</h4>
+    <div class="table-responsive mb-5">
+        <table class="table table-striped table-bordered text-center align-middle">
+            <thead class="table-dark">
+                <tr><th>ลำดับ</th><th>ชื่อลูกค้า / ผู้ซื้อ</th><th>ผู้บันทึกโพย (Agent)</th><th>จำนวนบิล</th><th>ยอดซื้อรวม (บาท)</th><th>ส่วนลดรวม (บาท)</th><th>ยอดสุทธิ (บาท)</th></tr>
+            </thead>
+            <tbody>
+                {% for s in sales_breakdown %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td><b>{{ s[0] }}</b></td>
+                    <td><span class="badge bg-secondary">{{ s[1] }}</span></td>
+                    <td>{{ s[2] }}</td>
+                    <td>{{ "{:,.2f}".format(s[3] | float) }}</td>
+                    <td class="text-danger">{{ "{:,.2f}".format(s[4] | float) }}</td>
+                    <td class="text-success fw-bold">{{ "{:,.2f}".format(s[5] | float) }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" class="text-muted">ยังไม่มีข้อมูลยอดขายในงวดนี้</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <h4 class="mt-4 mb-3 fw-bold text-dark">🏷️ รายละเอียดส่วนลดแยกตามรายชื่อลูกค้า / ผู้ซื้อ</h4>
+    <div class="table-responsive">
+        <table class="table table-striped table-bordered text-center align-middle">
+            <thead class="table-dark">
+                <tr><th>ลำดับ</th><th>ชื่อลูกค้า / ผู้ซื้อ</th><th>ผู้บันทึกโพย (Agent)</th><th>ยอดซื้อรวม (บาท)</th><th>ส่วนลดรวม (บาท)</th><th>คิดเป็น % เฉลี่ย</th></tr>
+            </thead>
+            <tbody>
+                {% for d in discount_breakdown %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td><b>{{ d[0] }}</b></td>
+                    <td><span class="badge bg-secondary">{{ d[1] }}</span></td>
+                    <td>{{ "{:,.2f}".format(d[2] | float) }}</td>
+                    <td class="text-danger fw-bold">{{ "{:,.2f}".format(d[3] | float) }}</td>
+                    <td>
+                        {% set total_amt = d[2] | float %}
+                        {% set total_disc = d[3] | float %}
+                        {% if total_amt > 0 %}
+                            <span class="badge bg-info text-dark">{{ "%.2f"|format((total_disc / total_amt) * 100) }}%</span>
+                        {% else %}
+                            0%
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" class="text-muted">ยังไม่มีข้อมูลส่วนลดในงวดนี้</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -1207,11 +1263,20 @@ def results_page(user: str, draw: str):
                 winners.append((cname, uname, clean_num, clean_type, amt_val, rate_val, payout))
                 total_payout += payout
 
+        # ดึงข้อมูลสำหรับตารางสรุปยอดขายแยกตามรายชื่อลูกค้า
+        c.execute("SELECT customer_name, username, COUNT(DISTINCT bill_no), SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY customer_name, username", (draw, f"%{draw}%"))
+        sales_breakdown = c.fetchall()
+
+        # ดึงข้อมูลสำหรับตารางสรุปส่วนลดแยกตามรายชื่อลูกค้า
+        c.execute("SELECT customer_name, username, SUM(amount), SUM(discount) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY customer_name, username", (draw, f"%{draw}%"))
+        discount_breakdown = c.fetchall()
+
         conn.close()
         content = Template(RESULTS_CONTENT).render(
             username=user, draw_date=draw, prize_1=prize_1, bottom_2=bottom_2, 
             total_sales=total_sales, total_discount=total_discount, total_net=total_net, 
-            winners=winners, total_payout=total_payout
+            winners=winners, total_payout=total_payout,
+            sales_breakdown=sales_breakdown, discount_breakdown=discount_breakdown
         )
         return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
     except Exception as e:
