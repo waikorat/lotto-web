@@ -17,8 +17,6 @@ def startup_db():
     try:
         conn = connect_db()
         c = conn.cursor()
-        
-        # สร้างตาราง Customers พร้อมรองรับฟิลด์ส่วนลดและอัตราจ่ายอย่างครบถ้วนชัดเจน
         c.execute("""
             CREATE TABLE IF NOT EXISTS Customers (
                 id SERIAL PRIMARY KEY,
@@ -33,7 +31,6 @@ def startup_db():
                 pay_2d NUMERIC DEFAULT 70
             );
         """)
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS LotteryCampaigns (
                 id SERIAL PRIMARY KEY,
@@ -93,7 +90,6 @@ def startup_db():
             );
         """)
         
-        # ตรวจสอบและเพิ่มคอลัมน์ส่วนลดแยก 3 ตัวและ 2 ตัวในตาราง Customers เสมอ
         c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_3d NUMERIC DEFAULT 0;")
         c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_2d NUMERIC DEFAULT 0;")
         c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_total NUMERIC DEFAULT 0;")
@@ -1076,20 +1072,42 @@ def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: st
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("SELECT num, type, amt_teng, payout_rate, discount, net, status FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
+        
+        # ดึงอัตราส่วนลดล่าสุดจากตาราง Customers เพื่อให้มั่นใจ 100% ว่าใช้เรทปัจจุบันที่บันทึกไว้
+        disc_total, disc_3d, disc_2d = 0.0, 0.0, 0.0
+        if c_type == 'Customer':
+            c.execute("SELECT disc_total, disc_3d, disc_2d FROM Customers WHERE id=%s", (c_id,))
+            c_res = c.fetchone()
+            if c_res:
+                disc_total = float(c_res[0] or 0)
+                disc_3d = float(c_res[1] or 0)
+                disc_2d = float(c_res[2] or 0)
+
+        c.execute("SELECT num, type, amt_teng, payout_rate, status FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
         drafts = c.fetchall()
         if drafts:
             bill_no = f"BILL-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:21]}-{c_id}"
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            for n, t_type, amt, rate, disc, net, status_val in drafts:
+            for n, t_type, amt, rate, status_val in drafts:
+                amt_val = float(amt or 0)
                 final_rate = float(rate or 0)
                 if final_rate <= 0:
                     if t_type == "3ตัวตรง": final_rate = 500.0
                     elif t_type == "3ตัวโต๊ด": final_rate = 100.0
                     elif t_type in ["2ตัวบน", "2ตัวล่าง"]: final_rate = 70.0
 
+                # คำนวณส่วนลดตามประเภทเลขใหม่อย่างแม่นยำจากตาราง Customers โดยตรง
+                d_rate = 0.0
+                if "3ตัว" in t_type:
+                    d_rate = disc_3d if disc_3d > 0 else disc_total
+                elif "2ตัว" in t_type:
+                    d_rate = disc_2d if disc_2d > 0 else disc_total
+
+                final_disc = amt_val * (d_rate / 100.0)
+                final_net = amt_val - final_disc
+
                 c.execute("INSERT INTO Transactions (draw_date, timestamp, username, customer_id, customer_name, customer_type, bill_no, num, type, amount, status, discount, net, payout_rate) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
-                          (draw, ts, user, int(c_id), c_name, c_type, bill_no, n, t_type, amt, status_val, disc, net, final_rate))
+                          (draw, ts, user, int(c_id), c_name, c_type, bill_no, n, t_type, amt_val, status_val, final_disc, final_net, final_rate))
             c.execute("DELETE FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
             conn.commit()
         conn.close()
@@ -1282,7 +1300,7 @@ def results_page(user: str, draw: str):
                 winners.append((cname, uname, clean_num, clean_type, amt_val, rate_val, payout))
                 total_payout += payout
 
-        # ดึงข้อมูลยอดขายและส่วนลดแยกตามรายชื่อลูกค้าจาก Transactions จริง
+        # ดึงข้อมูลยอดขายและส่วนลดแยกตามรายชื่อลูกค้าจาก Transactions จริงอย่างแม่นยำ
         c.execute("SELECT customer_name, username, COUNT(DISTINCT bill_no), SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY customer_name, username", (draw, f"%{draw}%"))
         sales_breakdown = c.fetchall()
 
