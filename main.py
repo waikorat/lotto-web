@@ -292,7 +292,7 @@ BUY_CONTENT = """
                 <div class="mb-3">
                     <label class="form-label fw-bold text-dark">คีย์รายการ (เช่น 123=100*100, 456=50 หรือ 12,34=50):</label>
                     <input type="text" name="raw_input" class="form-control form-control-lg" placeholder="พิมพ์เลขและราคา..." required autofocus>
-                    <div class="form-text text-danger">*ห้ามใส่ลูกน้ำในยอดเงิน เช่น 1000 ห้ามพิมพ์ 1,000</div>
+                    <div class="form-text text-danger">*ห้ามใส่ลูกน้ำในยอดเงิน เช่น 1000 ห้ามพิมพ์ 1,000 | อัตราจ่ายห้ามเป็น 0 โดยเด็ดขาด (เรทมาตรฐาน: 3ตัวตรง 500 / โต๊ด 100 / 2ตัว 70)</div>
                 </div>
                 <button type="submit" class="btn btn-success btn-lg w-100 fw-bold">📥 บันทึกลงรายการร่าง</button>
             </form>
@@ -317,7 +317,7 @@ BUY_CONTENT = """
                             <td><b>{{ d[1] }}</b></td>
                             <td>{{ d[4] }}</td>
                             <td>{{ "{:,.2f}".format(d[2] | float) }}</td>
-                            <td>{{ d[5] }}</td>
+                            <td><span class="badge bg-success">{{ d[5] }}</span></td>
                             <td>{{ d[6] }}%</td>
                             <td>{{ "{:,.2f}".format(d[7] | float) }}</td>
                             <td><span class="badge bg-danger">{{ d[3] }}</span></td>
@@ -393,7 +393,7 @@ AUDIT_ALL_CONTENT = """
                     <td>{{ r[9] }}</td>
                     <td><b class="text-primary fs-6">{{ r[8] }}</b></td>
                     <td>{{ "{:,.2f}".format(r[10] | float) }}</td>
-                    <td>{{ r[14] }}</td>
+                    <td><span class="badge bg-success">{{ r[14] }}</span></td>
                     <td class="text-success fw-bold">{{ "{:,.2f}".format(r[13] | float) }}</td>
                 </tr>
                 {% else %}
@@ -505,7 +505,7 @@ RESULTS_CONTENT = """
             <tbody>
                 {% for w in winners %}
                 <tr>
-                    <td><b>{{ w[0] }}</b></td><td><span class="badge bg-secondary">{{ w[1] }}</span></td><td><code>{{ w[2] }}</code></td><td>{{ w[3] }}</td><td>{{ "{:,.2f}".format(w[4] | float) }}</td><td>{{ w[5] }}</td><td class="text-success fw-bold">฿{{ "{:,.2f}".format(w[6] | float) }}</td>
+                    <td><b>{{ w[0] }}</b></td><td><span class="badge bg-secondary">{{ w[1] }}</span></td><td><code>{{ w[2] }}</code></td><td>{{ w[3] }}</td><td>{{ "{:,.2f}".format(w[4] | float) }}</td><td><span class="badge bg-success">{{ w[5] }}</span></td><td class="text-success fw-bold">฿{{ "{:,.2f}".format(w[6] | float) }}</td>
                 </tr>
                 {% else %}
                 <tr><td colspan="7" class="text-muted">ยังไม่มีผู้ถูกรางวัล หรือยังไม่ได้บันทึกผลรางวัล</td></tr>
@@ -533,11 +533,11 @@ CUSTOMER_CONTENT = """
                     <input type="number" step="0.01" name="disc_total" class="form-control" value="0">
                 </div>
                 <div class="row mb-3">
-                    <div class="col"><label class="form-label text-dark">จ่าย 3 ตรง:</label><input type="number" step="0.01" name="pay_3d" class="form-control" value="0"></div>
-                    <div class="col"><label class="form-label text-dark">จ่าย 3 โต๊ด:</label><input type="number" step="0.01" name="pay_3tod" class="form-control" value="0"></div>
+                    <div class="col"><label class="form-label text-dark">จ่าย 3 ตรง:</label><input type="number" step="0.01" name="pay_3d" class="form-control" value="500"></div>
+                    <div class="col"><label class="form-label text-dark">จ่าย 3 โต๊ด:</label><input type="number" step="0.01" name="pay_3tod" class="form-control" value="100"></div>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label text-dark">จ่าย 2 ตัว:</label><input type="number" step="0.01" name="pay_2d" class="form-control" value="0">
+                    <label class="form-label text-dark">จ่าย 2 ตัว:</label><input type="number" step="0.01" name="pay_2d" class="form-control" value="70">
                 </div>
                 <button type="submit" class="btn btn-success w-100 fw-bold">บันทึกลูกค้า</button>
             </form>
@@ -827,14 +827,15 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
         conn = connect_db()
         c = conn.cursor()
         
-        pay_3d, pay_3tod, pay_2d, disc_total = 500.0, 100.0, 90.0, 0.0
+        # ดึงอัตราจ่ายจากฐานข้อมูลลูกค้า โดยบังคับไม่ให้เป็น 0 (เรทมาตรฐานใหม่: 3ตัวตรง 500, โต๊ด 100, 2ตัว 70)
+        pay_3d, pay_3tod, pay_2d, disc_total = 500.0, 100.0, 70.0, 0.0
         if c_type == 'Customer':
             c.execute("SELECT pay_3d, pay_3tod, pay_2d, disc_total FROM Customers WHERE id=%s", (c_id,))
             res = c.fetchone()
             if res:
-                pay_3d = float(res[0] or 500)
-                pay_3tod = float(res[1] or 100)
-                pay_2d = float(res[2] or 90)
+                pay_3d = float(res[0]) if res[0] is not None and float(res[0]) > 0 else 500.0
+                pay_3tod = float(res[1]) if res[1] is not None and float(res[1]) > 0 else 100.0
+                pay_2d = float(res[2]) if res[2] is not None and float(res[2]) > 0 else 70.0
                 disc_total = float(res[3] or 0)
 
         hold_nums = []
@@ -896,8 +897,15 @@ def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: st
             bill_no = f"BILL-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:21]}-{c_id}"
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             for n, t_type, amt, rate, disc, net, status_val in drafts:
+                # ป้องกันอัตราจ่ายเป็น 0 ก่อนบันทึกจริงลง Transactions
+                final_rate = float(rate or 0)
+                if final_rate <= 0:
+                    if t_type == "3ตัวตรง": final_rate = 500.0
+                    elif t_type == "3ตัวโต๊ด": final_rate = 100.0
+                    elif t_type in ["2ตัวบน", "2ตัวล่าง"]: final_rate = 70.0
+
                 c.execute("INSERT INTO Transactions (draw_date, timestamp, username, customer_id, customer_name, customer_type, bill_no, num, type, amount, status, discount, net, payout_rate) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
-                          (draw, ts, user, int(c_id), c_name, c_type, bill_no, n, t_type, amt, status_val, disc, net, rate))
+                          (draw, ts, user, int(c_id), c_name, c_type, bill_no, n, t_type, amt, status_val, disc, net, final_rate))
             c.execute("DELETE FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
             conn.commit()
         conn.close()
@@ -1001,7 +1009,7 @@ def results_page(user: str, draw: str):
             conn.close()
             return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
 
-        # 1. ดึงผลรางวัลของงวดนี้แบบครอบคลุม (รองรับทั้งแบบตรงและ ILIKE)
+        # 1. ดึงผลรางวัลของงวดนี้
         c.execute("SELECT prize_1, bottom_2 FROM DrawResults WHERE draw_date = %s OR draw_date ILIKE %s", (draw, f"%{draw}%"))
         res = c.fetchone()
         prize_1 = str(res[0]).strip() if res and res[0] else ""
@@ -1015,7 +1023,16 @@ def results_page(user: str, draw: str):
             if b_status != "ปิดรับ" and b_num:
                 half_pay_numbers.add(str(b_num).strip())
 
-        # 3. คำนวณยอดรวมยอดขายทั้งหมดในระบบสำหรับงวดนี้
+        # 3. โหลดข้อมูลอัตราจ่ายจริงของลูกค้าแต่ละรายจากตาราง Customers (เรทมาตรฐานใหม่ 500 / 100 / 70)
+        c.execute("SELECT id, name, pay_3d, pay_3tod, pay_2d FROM Customers")
+        customer_rates = {}
+        for cust in c.fetchall():
+            c_id_key, c_name_key, p3d, p3tod, p2d = cust[0], cust[1], cust[2], cust[3], cust[4]
+            customer_rates[str(c_id_key)] = {"pay_3d": float(p3d or 500), "pay_3tod": float(p3tod or 100), "pay_2d": float(p2d or 70)}
+            if c_name_key:
+                customer_rates[str(c_name_key).strip()] = {"pay_3d": float(p3d or 500), "pay_3tod": float(p3tod or 100), "pay_2d": float(p2d or 70)}
+
+        # 4. คำนวณยอดรวมยอดขายทั้งหมดในระบบสำหรับงวดนี้
         c.execute("SELECT SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
         sales_res = c.fetchone()
         total_sales = float(sales_res[0] or 0) if sales_res and sales_res[0] else 0.0
@@ -1025,18 +1042,33 @@ def results_page(user: str, draw: str):
         winners = []
         total_payout = 0.0
         
-        # 4. ดึงรายการ Transactions ทั้งหมดในงวดนี้มาตรวจสอบอย่างครบถ้วน (ไม่จำกัดเฉพาะ User ใด User หนึ่ง)
-        c.execute("SELECT customer_name, username, num, type, amount, payout_rate FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
+        # 5. ดึงรายการ Transactions ทั้งหมดในงวดนี้มาตรวจสอบอย่างครบถ้วน
+        c.execute("SELECT customer_name, username, num, type, amount, payout_rate, customer_id FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
         txs = c.fetchall()
         
-        for cname, uname, num, ttype, amt, rate in txs:
-            payout = 0.0
+        for cname, uname, num, ttype, amt, rate, cid in txs:
             amt_val = float(amt or 0)
-            rate_val = float(rate or 0) if rate else 0.0
             clean_num = str(num).strip()
             clean_type = str(ttype).strip()
             
-            # ตรวจสอบเงื่อนไขการถูกรางวัลแต่ละประเภท
+            # ตรวจสอบและดึงอัตราจ่ายให้ถูกต้องแม่นยำที่สุด (ไม่ยอมให้เป็น 0 โดยเด็ดขาด)
+            rate_val = float(rate or 0)
+            if rate_val <= 0:
+                if str(cid) in customer_rates:
+                    if "3ตัวตรง" in clean_type: rate_val = customer_rates[str(cid)]["pay_3d"]
+                    elif "3ตัวโต๊ด" in clean_type: rate_val = customer_rates[str(cid)]["pay_3tod"]
+                    elif "2ตัว" in clean_type: rate_val = customer_rates[str(cid)]["pay_2d"]
+                elif str(cname).strip() in customer_rates:
+                    if "3ตัวตรง" in clean_type: rate_val = customer_rates[str(cname).strip()]["pay_3d"]
+                    elif "3ตัวโต๊ด" in clean_type: rate_val = customer_rates[str(cname).strip()]["pay_3tod"]
+                    elif "2ตัว" in clean_type: rate_val = customer_rates[str(cname).strip()]["pay_2d"]
+                
+                # หากยังเป็น 0 ให้ใช้เรทมาตรฐานใหม่
+                if rate_val <= 0:
+                    if clean_type == "3ตัวตรง": rate_val = 500.0
+                    elif clean_type == "3ตัวโต๊ด": rate_val = 100.0
+                    elif clean_type in ["2ตัวบน", "2ตัวล่าง"]: rate_val = 70.0
+
             is_winner = False
             if clean_type == "3ตัวตรง" and prize_1 and clean_num == prize_1:
                 is_winner = True
@@ -1048,7 +1080,6 @@ def results_page(user: str, draw: str):
                 is_winner = True
             
             if is_winner:
-                # ตรวจสอบว่าเป็นเลขอั้นจ่ายครึ่งหรือไม่
                 if clean_num in half_pay_numbers:
                     rate_val = rate_val / 2.0
                 
@@ -1098,10 +1129,15 @@ def customers_page(user: str, draw: str, msg: str = None):
 @app.post("/save-customer")
 def save_customer(user: str = Form(...), draw: str = Form(...), name: str = Form(...), disc_total: float = Form(0), pay_3d: float = Form(0), pay_3tod: float = Form(0), pay_2d: float = Form(0)):
     try:
+        # บังคับค่าอัตราจ่ายห้ามเป็น 0 (ใช้เรทมาตรฐานใหม่ 500 / 100 / 70)
+        final_pay_3d = pay_3d if pay_3d > 0 else 500.0
+        final_pay_3tod = pay_3tod if pay_3tod > 0 else 100.0
+        final_pay_2d = pay_2d if pay_2d > 0 else 70.0
+
         conn = connect_db()
         c = conn.cursor()
         c.execute("INSERT INTO Customers (name, owner_username, discount_type, disc_total, pay_3d, pay_3tod, pay_2d) VALUES (%s,%s,%s,%s,%s,%s,%s)", 
-                  (name, user, 1, disc_total, pay_3d, pay_3tod, pay_2d))
+                  (name, user, 1, disc_total, final_pay_3d, final_pay_3tod, final_pay_2d))
         conn.commit()
         conn.close()
     except: pass
