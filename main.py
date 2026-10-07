@@ -1001,13 +1001,13 @@ def results_page(user: str, draw: str):
             conn.close()
             return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
 
-        # ดึงผลรางวัลของงวดนี้และตัดช่องว่าง
+        # 1. ดึงผลรางวัลของงวดนี้แบบครอบคลุม (รองรับทั้งแบบตรงและ ILIKE)
         c.execute("SELECT prize_1, bottom_2 FROM DrawResults WHERE draw_date = %s OR draw_date ILIKE %s", (draw, f"%{draw}%"))
         res = c.fetchone()
         prize_1 = str(res[0]).strip() if res and res[0] else ""
         bottom_2 = str(res[1]).strip() if res and res[1] else ""
 
-        # โหลดรายการเลขอั้นจ่ายครึ่งของงวดนี้มาตรวจสอบ
+        # 2. โหลดรายการเลขอั้นจ่ายครึ่งทั้งหมดในงวดนี้
         c.execute("SELECT raw_num, status FROM BlockedNumbers WHERE draw_date = %s OR draw_date ILIKE %s", (draw, f"%{draw}%"))
         block_rows = c.fetchall()
         half_pay_numbers = set()
@@ -1015,7 +1015,7 @@ def results_page(user: str, draw: str):
             if b_status != "ปิดรับ" and b_num:
                 half_pay_numbers.add(str(b_num).strip())
 
-        # คำนวณยอดรวมทั้งระบบแบบครอบคลุม
+        # 3. คำนวณยอดรวมยอดขายทั้งหมดในระบบสำหรับงวดนี้
         c.execute("SELECT SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
         sales_res = c.fetchone()
         total_sales = float(sales_res[0] or 0) if sales_res and sales_res[0] else 0.0
@@ -1025,7 +1025,7 @@ def results_page(user: str, draw: str):
         winners = []
         total_payout = 0.0
         
-        # ดึงรายการโพยทั้งหมดในระบบเพื่อนำมาตรวจรางวัล
+        # 4. ดึงรายการ Transactions ทั้งหมดในงวดนี้มาตรวจสอบอย่างครบถ้วน (ไม่จำกัดเฉพาะ User ใด User หนึ่ง)
         c.execute("SELECT customer_name, username, num, type, amount, payout_rate FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
         txs = c.fetchall()
         
@@ -1036,22 +1036,23 @@ def results_page(user: str, draw: str):
             clean_num = str(num).strip()
             clean_type = str(ttype).strip()
             
-            # ตรวจสอบเงื่อนไขการถูกรางวัลแต่ละประเภท (รองรับการตัดช่องว่าง)
+            # ตรวจสอบเงื่อนไขการถูกรางวัลแต่ละประเภท
+            is_winner = False
             if clean_type == "3ตัวตรง" and prize_1 and clean_num == prize_1:
-                payout = amt_val * rate_val
+                is_winner = True
             elif clean_type == "3ตัวโต๊ด" and prize_1 and sorted(clean_num) == sorted(prize_1) and clean_num != prize_1:
-                payout = amt_val * rate_val
+                is_winner = True
             elif clean_type == "2ตัวบน" and prize_1 and len(prize_1) >= 2 and clean_num == prize_1[-2:]:
-                payout = amt_val * rate_val
+                is_winner = True
             elif clean_type == "2ตัวล่าง" and bottom_2 and clean_num == bottom_2:
-                payout = amt_val * rate_val
+                is_winner = True
             
-            # หากหมายเลขนี้เป็นเลขอั้นจ่ายครึ่ง (อยู่ใน BlockedNumbers และไม่ใช่สถานะปิดรับ) ให้หารอัตราจ่ายลงครึ่งหนึ่ง
-            if payout > 0 and clean_num in half_pay_numbers:
-                rate_val = rate_val / 2.0
+            if is_winner:
+                # ตรวจสอบว่าเป็นเลขอั้นจ่ายครึ่งหรือไม่
+                if clean_num in half_pay_numbers:
+                    rate_val = rate_val / 2.0
+                
                 payout = amt_val * rate_val
-
-            if payout > 0:
                 winners.append((cname, uname, clean_num, clean_type, amt_val, rate_val, payout))
                 total_payout += payout
 
