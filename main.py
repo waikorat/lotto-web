@@ -17,6 +17,8 @@ def startup_db():
     try:
         conn = connect_db()
         c = conn.cursor()
+        
+        # สร้างตารางหลักและตาราง TempDraft พร้อมฟิลด์ status และส่วนลดอย่างครบถ้วน
         c.execute("""
             CREATE TABLE IF NOT EXISTS Customers (
                 id SERIAL PRIMARY KEY,
@@ -55,12 +57,27 @@ def startup_db():
                 status TEXT DEFAULT 'ปกติ'
             );
         """)
-        c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ปกติ';")
-        c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS amt_teng NUMERIC DEFAULT 0;")
-        c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS amt_tod NUMERIC DEFAULT 0;")
-        c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS payout_rate NUMERIC DEFAULT 0;")
-        c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS discount NUMERIC DEFAULT 0;")
-        c.execute("ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS net NUMERIC DEFAULT 0;")
+        conn.commit()
+
+        # ทำการตรวจสอบและเพิ่มคอลัมน์พร้อม Commit ทันทีเพื่อป้องกันปัญหาคอลัมน์ไม่มีอยู่จริง
+        migrations = [
+            "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ปกติ';",
+            "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS amt_teng NUMERIC DEFAULT 0;",
+            "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS amt_tod NUMERIC DEFAULT 0;",
+            "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS payout_rate NUMERIC DEFAULT 0;",
+            "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS discount NUMERIC DEFAULT 0;",
+            "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS net NUMERIC DEFAULT 0;",
+            "ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_3d NUMERIC DEFAULT 0;",
+            "ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_2d NUMERIC DEFAULT 0;",
+            "ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_total NUMERIC DEFAULT 0;"
+        ]
+        for mig in migrations:
+            try:
+                c.execute(mig)
+                conn.commit()
+            except Exception as m_err:
+                conn.rollback()
+                print("Migration note:", m_err)
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS Transactions (
@@ -89,11 +106,6 @@ def startup_db():
                 bottom_2 TEXT
             );
         """)
-        
-        c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_3d NUMERIC DEFAULT 0;")
-        c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_2d NUMERIC DEFAULT 0;")
-        c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_total NUMERIC DEFAULT 0;")
-        
         conn.commit()
         conn.close()
     except Exception as e:
@@ -1073,7 +1085,6 @@ def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: st
         conn = connect_db()
         c = conn.cursor()
         
-        # ดึงอัตราส่วนลดล่าสุดจากตาราง Customers เพื่อให้มั่นใจ 100% ว่าใช้เรทปัจจุบันที่บันทึกไว้
         disc_total, disc_3d, disc_2d = 0.0, 0.0, 0.0
         if c_type == 'Customer':
             c.execute("SELECT disc_total, disc_3d, disc_2d FROM Customers WHERE id=%s", (c_id,))
@@ -1096,7 +1107,6 @@ def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: st
                     elif t_type == "3ตัวโต๊ด": final_rate = 100.0
                     elif t_type in ["2ตัวบน", "2ตัวล่าง"]: final_rate = 70.0
 
-                # คำนวณส่วนลดตามประเภทเลขใหม่อย่างแม่นยำจากตาราง Customers โดยตรง
                 d_rate = 0.0
                 if "3ตัว" in t_type:
                     d_rate = disc_3d if disc_3d > 0 else disc_total
@@ -1300,7 +1310,6 @@ def results_page(user: str, draw: str):
                 winners.append((cname, uname, clean_num, clean_type, amt_val, rate_val, payout))
                 total_payout += payout
 
-        # ดึงข้อมูลยอดขายและส่วนลดแยกตามรายชื่อลูกค้าจาก Transactions จริงอย่างแม่นยำ
         c.execute("SELECT customer_name, username, COUNT(DISTINCT bill_no), SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY customer_name, username", (draw, f"%{draw}%"))
         sales_breakdown = c.fetchall()
 
