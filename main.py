@@ -316,10 +316,10 @@ BUY_CONTENT = """
                         <tr>
                             <td><b>{{ d[1] }}</b></td>
                             <td>{{ d[4] }}</td>
-                            <td>{{ "{:,.2f}".format(d[2] or 0) }}</td>
+                            <td>{{ "{:,.2f}".format(d[2] | float) }}</td>
                             <td>{{ d[5] }}</td>
                             <td>{{ d[6] }}%</td>
-                            <td>{{ "{:,.2f}".format(d[7] or 0) }}</td>
+                            <td>{{ "{:,.2f}".format(d[7] | float) }}</td>
                             <td><span class="badge bg-danger">{{ d[3] }}</span></td>
                         </tr>
                         {% else %}
@@ -392,9 +392,9 @@ AUDIT_ALL_CONTENT = """
                     <td><b>{{ r[5] }}</b></td>
                     <td>{{ r[9] }}</td>
                     <td><b class="text-primary fs-6">{{ r[8] }}</b></td>
-                    <td>{{ "{:,.2f}".format(r[10] or 0) }}</td>
+                    <td>{{ "{:,.2f}".format(r[10] | float) }}</td>
                     <td>{{ r[14] }}</td>
-                    <td class="text-success fw-bold">{{ "{:,.2f}".format(r[13] or 0) }}</td>
+                    <td class="text-success fw-bold">{{ "{:,.2f}".format(r[13] | float) }}</td>
                 </tr>
                 {% else %}
                 <tr><td colspan="11" class="text-muted py-4">ยังไม่มีการบันทึกโพยใดๆ ในงวดนี้</td></tr>
@@ -425,7 +425,7 @@ DASHBOARD_CONTENT = """
             <tbody>
                 {% for r in dash_rows %}
                 <tr>
-                    <td>{{ r[0] }}</td><td><b>{{ r[1] }}</b></td><td>{{ "{:,.2f}".format(r[2] or 0) }}</td><td>{{ r[3] }}</td>
+                    <td>{{ r[0] }}</td><td><b>{{ r[1] }}</b></td><td>{{ "{:,.2f}".format(r[2] | float) }}</td><td>{{ r[3] }}</td>
                 </tr>
                 {% else %}
                 <tr><td colspan="4" class="text-muted">ยังไม่มีรายการซื้อในสายงานของคุณสำหรับงวดนี้</td></tr>
@@ -453,7 +453,7 @@ REPORTS_CONTENT = """
             <tbody>
                 {% for c in rep_customers %}
                 <tr>
-                    <td><b>{{ c[0] }}</b></td><td>{{ c[1] }}</td><td>{{ "{:,.2f}".format(c[2] or 0) }}</td><td>{{ "{:,.2f}".format(c[3] or 0) }}</td><td class="text-success fw-bold">{{ "{:,.2f}".format(c[4] or 0) }}</td>
+                    <td><b>{{ c[0] }}</b></td><td>{{ c[1] }}</td><td>{{ "{:,.2f}".format(c[2] | float) }}</td><td>{{ "{:,.2f}".format(c[3] | float) }}</td><td class="text-success fw-bold">{{ "{:,.2f}".format(c[4] | float) }}</td>
                 </tr>
                 {% else %}
                 <tr><td colspan="5" class="text-muted">ยังไม่มีข้อมูลยอดขายในงวดนี้</td></tr>
@@ -496,7 +496,7 @@ RESULTS_CONTENT = """
         <div class="col-md-6 mb-2"><div class="p-3 bg-warning text-dark border rounded shadow-sm"><h5>กำไร / ขาดทุนสุทธิ (Net Profit)</h5><h3 class="fw-bold">฿{{ "{:,.2f}".format(total_net - total_payout) }}</h3></div></div>
     </div>
 
-    <h4 class="mt-4 mb-3 fw-bold text-dark">รายชื่อผู้ถูกรางวัลทั้งหมดในงวดนี้</h4>
+    <h4 class="mt-4 mb-3 fw-bold text-dark">รายชื่อผู้ถูกรางวัลทั้งหมดในงวดนี้ (รวมทุกลูกค้าและทุกสายงาน)</h4>
     <div class="table-responsive">
         <table class="table table-striped table-bordered text-center align-middle">
             <thead class="table-dark">
@@ -505,7 +505,7 @@ RESULTS_CONTENT = """
             <tbody>
                 {% for w in winners %}
                 <tr>
-                    <td><b>{{ w[0] }}</b></td><td><span class="badge bg-secondary">{{ w[1] }}</span></td><td><code>{{ w[2] }}</code></td><td>{{ w[3] }}</td><td>{{ "{:,.2f}".format(w[4] or 0) }}</td><td>{{ w[5] }}</td><td class="text-success fw-bold">฿{{ "{:,.2f}".format(w[6] or 0) }}</td>
+                    <td><b>{{ w[0] }}</b></td><td><span class="badge bg-secondary">{{ w[1] }}</span></td><td><code>{{ w[2] }}</code></td><td>{{ w[3] }}</td><td>{{ "{:,.2f}".format(w[4] | float) }}</td><td>{{ w[5] }}</td><td class="text-success fw-bold">฿{{ "{:,.2f}".format(w[6] | float) }}</td>
                 </tr>
                 {% else %}
                 <tr><td colspan="7" class="text-muted">ยังไม่มีผู้ถูกรางวัล หรือยังไม่ได้บันทึกผลรางวัล</td></tr>
@@ -917,6 +917,7 @@ def audit_all_page(user: str, draw: str):
             conn.close()
             return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
 
+        # ดึงข้อมูล Transactions ทั้งหมดในงวด โดยรองรับทั้งรูปแบบวันที่ตรงกันหรือมีคำว่า งวด พ่วงอยู่
         c.execute("SELECT * FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) ORDER BY id DESC", (draw, f"%{draw}%"))
         audit_rows = c.fetchall()
         conn.close()
@@ -1001,11 +1002,13 @@ def results_page(user: str, draw: str):
             conn.close()
             return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
 
-        c.execute("SELECT prize_1, bottom_2 FROM DrawResults WHERE draw_date = %s", (draw,))
+        # ดึงผลรางวัลของงวดนี้
+        c.execute("SELECT prize_1, bottom_2 FROM DrawResults WHERE draw_date = %s OR draw_date ILIKE %s", (draw, f"%{draw}%"))
         res = c.fetchone()
         prize_1 = res[0] if res else ""
         bottom_2 = res[1] if res else ""
 
+        # คำนวณยอดรวมทั้งระบบแบบครอบคลุมทุกลูกค้าและทุกสายงาน
         c.execute("SELECT SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
         sales_res = c.fetchone()
         total_sales = float(sales_res[0] or 0) if sales_res and sales_res[0] else 0.0
@@ -1014,25 +1017,29 @@ def results_page(user: str, draw: str):
 
         winners = []
         total_payout = 0.0
-        if prize_1 and bottom_2:
-            c.execute("SELECT customer_name, username, num, type, amount, payout_rate FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
-            txs = c.fetchall()
-            for cname, uname, num, ttype, amt, rate in txs:
-                payout = 0.0
-                amt_val = float(amt or 0)
-                rate_val = float(rate or 0) if rate else 0.0
-                if ttype == "3ตัวตรง" and num == prize_1:
-                    payout = amt_val * rate_val
-                elif ttype == "3ตัวโต๊ด" and sorted(num) == sorted(prize_1) and num != prize_1:
-                    payout = amt_val * rate_val
-                elif ttype == "2ตัวบน" and num == prize_1[-2:]:
-                    payout = amt_val * rate_val
-                elif ttype == "2ตัวล่าง" and num == bottom_2:
-                    payout = amt_val * rate_val
-                
-                if payout > 0:
-                    winners.append((cname, uname, num, ttype, amt_val, rate_val, payout))
-                    total_payout += payout
+        
+        # ดึงรายการโพยทั้งหมดในระบบเพื่อนำมาตรวจรางวัล
+        c.execute("SELECT customer_name, username, num, type, amount, payout_rate FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
+        txs = c.fetchall()
+        
+        for cname, uname, num, ttype, amt, rate in txs:
+            payout = 0.0
+            amt_val = float(amt or 0)
+            rate_val = float(rate or 0) if rate else 0.0
+            
+            # ตรวจสอบเงื่อนไขการถูกรางวัลแต่ละประเภท
+            if ttype == "3ตัวตรง" and num == prize_1:
+                payout = amt_val * rate_val
+            elif ttype == "3ตัวโต๊ด" and prize_1 and sorted(num) == sorted(prize_1) and num != prize_1:
+                payout = amt_val * rate_val
+            elif ttype == "2ตัวบน" and prize_1 and num == prize_1[-2:]:
+                payout = amt_val * rate_val
+            elif ttype == "2ตัวล่าง" and bottom_2 and num == bottom_2:
+                payout = amt_val * rate_val
+            
+            if payout > 0:
+                winners.append((cname, uname, num, ttype, amt_val, rate_val, payout))
+                total_payout += payout
 
         conn.close()
         content = Template(RESULTS_CONTENT).render(
