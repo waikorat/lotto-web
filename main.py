@@ -75,6 +75,11 @@ def startup_db():
                 bottom_2 TEXT
             );
         """)
+        
+        # ตรวจสอบและเพิ่มคอลัมน์ส่วนลดแยก 3 ตัวและ 2 ตัวในตาราง Customers หากยังไม่มี
+        c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_3d NUMERIC DEFAULT 0;")
+        c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_2d NUMERIC DEFAULT 0;")
+        
         conn.commit()
         conn.close()
     except Exception as e:
@@ -520,27 +525,61 @@ CUSTOMER_CONTENT = """
 <div class="row">
     <div class="col-md-4 mb-4">
         <div class="card shadow p-4">
-            <h4 class="text-success mb-3 fw-bold">➕ เพิ่มลูกค้ารายใหม่</h4>
-            <form method="POST" action="/save-customer">
-                <input type="hidden" name="user" value="{{ username }}">
-                <input type="hidden" name="draw" value="{{ draw_date }}">
-                <div class="mb-3">
-                    <label class="form-label fw-bold text-dark">ชื่อลูกค้า:</label>
-                    <input type="text" name="name" class="form-control" required>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label fw-bold text-dark">ส่วนลดรวม (%):</label>
-                    <input type="number" step="0.01" name="disc_total" class="form-control" value="0">
-                </div>
-                <div class="row mb-3">
-                    <div class="col"><label class="form-label text-dark">จ่าย 3 ตรง:</label><input type="number" step="0.01" name="pay_3d" class="form-control" value="500"></div>
-                    <div class="col"><label class="form-label text-dark">จ่าย 3 โต๊ด:</label><input type="number" step="0.01" name="pay_3tod" class="form-control" value="100"></div>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label text-dark">จ่าย 2 ตัว:</label><input type="number" step="0.01" name="pay_2d" class="form-control" value="70">
-                </div>
-                <button type="submit" class="btn btn-success w-100 fw-bold">บันทึกลูกค้า</button>
-            </form>
+            {% if edit_customer %}
+                <h4 class="text-warning mb-3 fw-bold">✏️ แก้ไขข้อมูลลูกค้า</h4>
+                <form method="POST" action="/update-customer">
+                    <input type="hidden" name="user" value="{{ username }}">
+                    <input type="hidden" name="draw" value="{{ draw_date }}">
+                    <input type="hidden" name="customer_id" value="{{ edit_customer[0] }}">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold text-dark">ชื่อลูกค้า:</label>
+                        <input type="text" name="name" class="form-control" value="{{ edit_customer[1] }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold text-dark">ส่วนลดรวม (%):</label>
+                        <input type="number" step="0.01" name="disc_total" class="form-control" value="{{ edit_customer[2] or 0 }}">
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col"><label class="form-label text-dark small">ส่วนลด 3 ตัว (%):</label><input type="number" step="0.01" name="disc_3d" class="form-control" value="{{ edit_customer[6] or 0 }}"></div>
+                        <div class="col"><label class="form-label text-dark small">ส่วนลด 2 ตัว (%):</label><input type="number" step="0.01" name="disc_2d" class="form-control" value="{{ edit_customer[7] or 0 }}"></div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col"><label class="form-label text-dark">จ่าย 3 ตรง:</label><input type="number" step="0.01" name="pay_3d" class="form-control" value="{{ edit_customer[3] or 500 }}"></div>
+                        <div class="col"><label class="form-label text-dark">จ่าย 3 โต๊ด:</label><input type="number" step="0.01" name="pay_3tod" class="form-control" value="{{ edit_customer[4] or 100 }}"></div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-dark">จ่าย 2 ตัว:</label><input type="number" step="0.01" name="pay_2d" class="form-control" value="{{ edit_customer[5] or 70 }}">
+                    </div>
+                    <button type="submit" class="btn btn-warning w-100 fw-bold mb-2">💾 บันทึกการแก้ไข</button>
+                    <a href="/customers?user={{ username }}&draw={{ draw_date }}" class="btn btn-outline-secondary w-100 fw-bold">ยกเลิก</a>
+                </form>
+            {% else %}
+                <h4 class="text-success mb-3 fw-bold">➕ เพิ่มลูกค้ารายใหม่</h4>
+                <form method="POST" action="/save-customer">
+                    <input type="hidden" name="user" value="{{ username }}">
+                    <input type="hidden" name="draw" value="{{ draw_date }}">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold text-dark">ชื่อลูกค้า:</label>
+                        <input type="text" name="name" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold text-dark">ส่วนลดรวม (%):</label>
+                        <input type="number" step="0.01" name="disc_total" class="form-control" value="0">
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col"><label class="form-label text-dark small">ส่วนลด 3 ตัว (%):</label><input type="number" step="0.01" name="disc_3d" class="form-control" value="0"></div>
+                        <div class="col"><label class="form-label text-dark small">ส่วนลด 2 ตัว (%):</label><input type="number" step="0.01" name="disc_2d" class="form-control" value="0"></div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col"><label class="form-label text-dark">จ่าย 3 ตรง:</label><input type="number" step="0.01" name="pay_3d" class="form-control" value="500"></div>
+                        <div class="col"><label class="form-label text-dark">จ่าย 3 โต๊ด:</label><input type="number" step="0.01" name="pay_3tod" class="form-control" value="100"></div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label text-dark">จ่าย 2 ตัว:</label><input type="number" step="0.01" name="pay_2d" class="form-control" value="70">
+                    </div>
+                    <button type="submit" class="btn btn-success w-100 fw-bold">บันทึกลูกค้า</button>
+                </form>
+            {% endif %}
         </div>
     </div>
     <div class="col-md-8">
@@ -549,15 +588,25 @@ CUSTOMER_CONTENT = """
             <div class="table-responsive">
                 <table class="table table-striped table-bordered text-center align-middle">
                     <thead class="table-dark">
-                        <tr><th>ID</th><th>ชื่อลูกค้า</th><th>ส่วนลด (%)</th><th>จ่าย 3 ตรง</th><th>จ่าย 3 โต๊ด</th><th>จ่าย 2 ตัว</th></tr>
+                        <tr><th>ID</th><th>ชื่อลูกค้า</th><th>ส่วนลดรวม</th><th>ลด 3 ตัว</th><th>ลด 2 ตัว</th><th>จ่าย 3 ตรง</th><th>จ่าย 3 โต๊ด</th><th>จ่าย 2 ตัว</th><th>จัดการ</th></tr>
                     </thead>
                     <tbody>
                         {% for c in customers_list %}
                         <tr>
-                            <td>{{ c[0] }}</td><td><b>{{ c[1] }}</b></td><td>{{ c[2] }}</td><td>{{ c[3] }}</td><td>{{ c[4] }}</td><td>{{ c[5] }}</td>
+                            <td>{{ c[0] }}</td>
+                            <td><b>{{ c[1] }}</b></td>
+                            <td>{{ c[2] }}%</td>
+                            <td><span class="text-danger fw-bold">{{ c[6] or 0 }}%</span></td>
+                            <td><span class="text-danger fw-bold">{{ c[7] or 0 }}%</span></td>
+                            <td>{{ c[3] }}</td>
+                            <td>{{ c[4] }}</td>
+                            <td>{{ c[5] }}</td>
+                            <td>
+                                <a href="/customers?user={{ username }}&draw={{ draw_date }}&edit_id={{ c[0] }}" class="btn btn-warning btn-sm fw-bold">✏️ แก้ไข</a>
+                            </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="6" class="text-muted">ยังไม่มีรายชื่อลูกค้า</td></tr>
+                        <tr><td colspan="9" class="text-muted">ยังไม่มีรายชื่อลูกค้า</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -827,16 +876,20 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
         conn = connect_db()
         c = conn.cursor()
         
-        # ดึงอัตราจ่ายจากฐานข้อมูลลูกค้า โดยบังคับไม่ให้เป็น 0 (เรทมาตรฐานใหม่: 3ตัวตรง 500, โต๊ด 100, 2ตัว 70)
-        pay_3d, pay_3tod, pay_2d, disc_total = 500.0, 100.0, 70.0, 0.0
+        # ดึงอัตราจ่ายและส่วนลดแยกประเภทจากฐานข้อมูลลูกค้า
+        pay_3d, pay_3tod, pay_2d = 500.0, 100.0, 70.0
+        disc_total, disc_3d, disc_2d = 0.0, 0.0, 0.0
+        
         if c_type == 'Customer':
-            c.execute("SELECT pay_3d, pay_3tod, pay_2d, disc_total FROM Customers WHERE id=%s", (c_id,))
+            c.execute("SELECT pay_3d, pay_3tod, pay_2d, disc_total, disc_3d, disc_2d FROM Customers WHERE id=%s", (c_id,))
             res = c.fetchone()
             if res:
                 pay_3d = float(res[0]) if res[0] is not None and float(res[0]) > 0 else 500.0
                 pay_3tod = float(res[1]) if res[1] is not None and float(res[1]) > 0 else 100.0
                 pay_2d = float(res[2]) if res[2] is not None and float(res[2]) > 0 else 70.0
                 disc_total = float(res[3] or 0)
+                disc_3d = float(res[4] or 0)
+                disc_2d = float(res[5] or 0)
 
         hold_nums = []
         for block in blocks:
@@ -855,23 +908,29 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
                 for n in hold_nums:
                     if len(n) == 3:
                         if top > 0:
-                            disc_amt = top * (disc_total / 100.0)
+                            # ใช้ส่วนลด 3 ตัว หากไม่มีให้ใช้ส่วนลดรวม
+                            d_rate = disc_3d if disc_3d > 0 else disc_total
+                            disc_amt = top * (d_rate / 100.0)
                             net_amt = top - disc_amt
                             c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
                                       (user, c_id, c_type, n, top, "3ตัวตรง", pay_3d, disc_amt, net_amt, "ปกติ"))
                         if bot > 0:
-                            disc_amt = bot * (disc_total / 100.0)
+                            d_rate = disc_3d if disc_3d > 0 else disc_total
+                            disc_amt = bot * (d_rate / 100.0)
                             net_amt = bot - disc_amt
                             c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
                                       (user, c_id, c_type, n, bot, "3ตัวโต๊ด", pay_3tod, disc_amt, net_amt, "ปกติ"))
                     elif len(n) == 2:
                         if top > 0:
-                            disc_amt = top * (disc_total / 100.0)
+                            # ใช้ส่วนลด 2 ตัว หากไม่มีให้ใช้ส่วนลดรวม
+                            d_rate = disc_2d if disc_2d > 0 else disc_total
+                            disc_amt = top * (d_rate / 100.0)
                             net_amt = top - disc_amt
                             c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
                                       (user, c_id, c_type, n, top, "2ตัวบน", pay_2d, disc_amt, net_amt, "ปกติ"))
                         if bot > 0:
-                            disc_amt = bot * (disc_total / 100.0)
+                            d_rate = disc_2d if disc_2d > 0 else disc_total
+                            disc_amt = bot * (d_rate / 100.0)
                             net_amt = bot - disc_amt
                             c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
                                       (user, c_id, c_type, n, bot, "2ตัวล่าง", pay_2d, disc_amt, net_amt, "ปกติ"))
@@ -897,7 +956,6 @@ def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: st
             bill_no = f"BILL-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:21]}-{c_id}"
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             for n, t_type, amt, rate, disc, net, status_val in drafts:
-                # ป้องกันอัตราจ่ายเป็น 0 ก่อนบันทึกจริงลง Transactions
                 final_rate = float(rate or 0)
                 if final_rate <= 0:
                     if t_type == "3ตัวตรง": final_rate = 500.0
@@ -1009,13 +1067,11 @@ def results_page(user: str, draw: str):
             conn.close()
             return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
 
-        # 1. ดึงผลรางวัลของงวดนี้
         c.execute("SELECT prize_1, bottom_2 FROM DrawResults WHERE draw_date = %s OR draw_date ILIKE %s", (draw, f"%{draw}%"))
         res = c.fetchone()
         prize_1 = str(res[0]).strip() if res and res[0] else ""
         bottom_2 = str(res[1]).strip() if res and res[1] else ""
 
-        # 2. โหลดรายการเลขอั้นจ่ายครึ่งทั้งหมดในงวดนี้
         c.execute("SELECT raw_num, status FROM BlockedNumbers WHERE draw_date = %s OR draw_date ILIKE %s", (draw, f"%{draw}%"))
         block_rows = c.fetchall()
         half_pay_numbers = set()
@@ -1023,7 +1079,6 @@ def results_page(user: str, draw: str):
             if b_status != "ปิดรับ" and b_num:
                 half_pay_numbers.add(str(b_num).strip())
 
-        # 3. โหลดข้อมูลอัตราจ่ายจริงของลูกค้าแต่ละรายจากตาราง Customers (เรทมาตรฐานใหม่ 500 / 100 / 70)
         c.execute("SELECT id, name, pay_3d, pay_3tod, pay_2d FROM Customers")
         customer_rates = {}
         for cust in c.fetchall():
@@ -1032,7 +1087,6 @@ def results_page(user: str, draw: str):
             if c_name_key:
                 customer_rates[str(c_name_key).strip()] = {"pay_3d": float(p3d or 500), "pay_3tod": float(p3tod or 100), "pay_2d": float(p2d or 70)}
 
-        # 4. คำนวณยอดรวมยอดขายทั้งหมดในระบบสำหรับงวดนี้
         c.execute("SELECT SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
         sales_res = c.fetchone()
         total_sales = float(sales_res[0] or 0) if sales_res and sales_res[0] else 0.0
@@ -1042,7 +1096,6 @@ def results_page(user: str, draw: str):
         winners = []
         total_payout = 0.0
         
-        # 5. ดึงรายการ Transactions ทั้งหมดในงวดนี้มาตรวจสอบอย่างครบถ้วน
         c.execute("SELECT customer_name, username, num, type, amount, payout_rate, customer_id FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
         txs = c.fetchall()
         
@@ -1051,7 +1104,6 @@ def results_page(user: str, draw: str):
             clean_num = str(num).strip()
             clean_type = str(ttype).strip()
             
-            # ตรวจสอบและดึงอัตราจ่ายให้ถูกต้องแม่นยำที่สุด (ไม่ยอมให้เป็น 0 โดยเด็ดขาด)
             rate_val = float(rate or 0)
             if rate_val <= 0:
                 if str(cid) in customer_rates:
@@ -1063,7 +1115,6 @@ def results_page(user: str, draw: str):
                     elif "3ตัวโต๊ด" in clean_type: rate_val = customer_rates[str(cname).strip()]["pay_3tod"]
                     elif "2ตัว" in clean_type: rate_val = customer_rates[str(cname).strip()]["pay_2d"]
                 
-                # หากยังเป็น 0 ให้ใช้เรทมาตรฐานใหม่
                 if rate_val <= 0:
                     if clean_type == "3ตัวตรง": rate_val = 500.0
                     elif clean_type == "3ตัวโต๊ด": rate_val = 100.0
@@ -1109,39 +1160,61 @@ def save_results(user: str = Form(...), draw: str = Form(...), prize_1: str = Fo
     return RedirectResponse(url=f"/results?user={user}&draw={draw}&msg=บันทึกผลรางวัลสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/customers", response_class=HTMLResponse)
-def customers_page(user: str, draw: str, msg: str = None):
+def customers_page(user: str, draw: str, msg: str = None, edit_id: int = None):
     try:
         conn = connect_db()
         c = conn.cursor()
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
         role = c.fetchone()[0]
-        c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d FROM Customers WHERE owner_username=%s", (user,))
+        
+        c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d, disc_3d, disc_2d FROM Customers WHERE owner_username=%s", (user,))
         custs_list = c.fetchall()
         if not custs_list and role == 'Admin':
-            c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d FROM Customers")
+            c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d, disc_3d, disc_2d FROM Customers")
             custs_list = c.fetchall()
+            
+        edit_customer = None
+        if edit_id:
+            c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d, disc_3d, disc_2d FROM Customers WHERE id=%s", (edit_id,))
+            edit_customer = c.fetchone()
+            
         conn.close()
-        content = Template(CUSTOMER_CONTENT).render(username=user, draw_date=draw, customers_list=custs_list)
+        content = Template(CUSTOMER_CONTENT).render(username=user, draw_date=draw, customers_list=custs_list, edit_customer=edit_customer)
         return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content, msg=msg)
     except Exception as e:
         return f"Error: {str(e)}"
 
 @app.post("/save-customer")
-def save_customer(user: str = Form(...), draw: str = Form(...), name: str = Form(...), disc_total: float = Form(0), pay_3d: float = Form(0), pay_3tod: float = Form(0), pay_2d: float = Form(0)):
+def save_customer(user: str = Form(...), draw: str = Form(...), name: str = Form(...), disc_total: float = Form(0), disc_3d: float = Form(0), disc_2d: float = Form(0), pay_3d: float = Form(0), pay_3tod: float = Form(0), pay_2d: float = Form(0)):
     try:
-        # บังคับค่าอัตราจ่ายห้ามเป็น 0 (ใช้เรทมาตรฐานใหม่ 500 / 100 / 70)
         final_pay_3d = pay_3d if pay_3d > 0 else 500.0
         final_pay_3tod = pay_3tod if pay_3tod > 0 else 100.0
         final_pay_2d = pay_2d if pay_2d > 0 else 70.0
 
         conn = connect_db()
         c = conn.cursor()
-        c.execute("INSERT INTO Customers (name, owner_username, discount_type, disc_total, pay_3d, pay_3tod, pay_2d) VALUES (%s,%s,%s,%s,%s,%s,%s)", 
-                  (name, user, 1, disc_total, final_pay_3d, final_pay_3tod, final_pay_2d))
+        c.execute("INSERT INTO Customers (name, owner_username, discount_type, disc_total, disc_3d, disc_2d, pay_3d, pay_3tod, pay_2d) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                  (name, user, 1, disc_total, disc_3d, disc_2d, final_pay_3d, final_pay_3tod, final_pay_2d))
         conn.commit()
         conn.close()
     except: pass
     return RedirectResponse(url=f"/customers?user={user}&draw={draw}&msg=เพิ่มลูกค้าสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.post("/update-customer")
+def update_customer(user: str = Form(...), draw: str = Form(...), customer_id: int = Form(...), name: str = Form(...), disc_total: float = Form(0), disc_3d: float = Form(0), disc_2d: float = Form(0), pay_3d: float = Form(0), pay_3tod: float = Form(0), pay_2d: float = Form(0)):
+    try:
+        final_pay_3d = pay_3d if pay_3d > 0 else 500.0
+        final_pay_3tod = pay_3tod if pay_3tod > 0 else 100.0
+        final_pay_2d = pay_2d if pay_2d > 0 else 70.0
+
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("UPDATE Customers SET name=%s, disc_total=%s, disc_3d=%s, disc_2d=%s, pay_3d=%s, pay_3tod=%s, pay_2d=%s WHERE id=%s", 
+                  (name, disc_total, disc_3d, disc_2d, final_pay_3d, final_pay_3tod, final_pay_2d, customer_id))
+        conn.commit()
+        conn.close()
+    except: pass
+    return RedirectResponse(url=f"/customers?user={user}&draw={draw}&msg=แก้ไขข้อมูลลูกค้าสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/users", response_class=HTMLResponse)
 def users_page(user: str, draw: str, msg: str = None):
