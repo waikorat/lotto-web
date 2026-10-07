@@ -76,7 +76,6 @@ def startup_db():
             );
         """)
         
-        # ตรวจสอบและเพิ่มคอลัมน์ส่วนลดแยก 3 ตัวและ 2 ตัวในตาราง Customers หากยังไม่มี
         c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_3d NUMERIC DEFAULT 0;")
         c.execute("ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_2d NUMERIC DEFAULT 0;")
         
@@ -180,6 +179,7 @@ LAYOUT = """
             <a href="/results?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ ชนะ แพ้ (รายละเอียด)</a>
             <a href="/reports?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ เอเย่นต์</a>
             <a href="/reports?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ สมาชิก</a>
+            <a href="/audit-discount?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item text-warning fw-bold">🔍 ตรวจสอบส่วนลดลูกค้า</a>
         </div>
 
         <div class="content-area">
@@ -403,6 +403,60 @@ AUDIT_ALL_CONTENT = """
                 </tr>
                 {% else %}
                 <tr><td colspan="11" class="text-muted py-4">ยังไม่มีการบันทึกโพยใดๆ ในงวดนี้</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+"""
+
+AUDIT_DISCOUNT_CONTENT = """
+<div class="card shadow p-4">
+    <h2 class="text-primary mb-3 fw-bold">🔍 รายงานตรวจสอบส่วนลดลูกค้าทุกรายในทุกบิล (Discount Audit Report)</h2>
+    <p class="text-muted">งวดวันที่: <b>{{ draw_date }}</b> | ตรวจสอบความถูกต้องของเปอร์เซ็นต์และยอดเงินส่วนลดที่คำนวณจริง</p>
+    
+    <div class="table-responsive mt-3">
+        <table class="table table-striped table-bordered table-hover text-center align-middle" style="font-size: 0.95rem;">
+            <thead class="table-dark">
+                <tr>
+                    <th>ลำดับ</th>
+                    <th>เวลาทำรายการ</th>
+                    <th>เลขที่บิล</th>
+                    <th>ชื่อลูกค้า</th>
+                    <th>ผู้บันทึก (Agent)</th>
+                    <th>ประเภท</th>
+                    <th>หมายเลข</th>
+                    <th>ยอดซื้อ (บาท)</th>
+                    <th>ส่วนลด (%)</th>
+                    <th>ส่วนลด (บาท)</th>
+                    <th>ยอดสุทธิ (บาท)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in discount_rows %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td><small>{{ r[2] }}</small></td>
+                    <td><code>{{ r[7] }}</code></td>
+                    <td><b>{{ r[5] }}</b></td>
+                    <td><span class="badge bg-secondary">{{ r[3] }}</span></td>
+                    <td>{{ r[9] }}</td>
+                    <td><b class="text-primary">{{ r[8] }}</b></td>
+                    <td>{{ "{:,.2f}".format(r[10] | float) }}</td>
+                    <td>
+                        {% set amt = r[10] | float %}
+                        {% set disc = r[12] | float %}
+                        {% if amt > 0 %}
+                            <span class="badge bg-info text-dark">{{ "%.2f"|format((disc / amt) * 100) }}%</span>
+                        {% else %}
+                            0%
+                        {% endif %}
+                    </td>
+                    <td class="text-danger fw-bold">{{ "{:,.2f}".format(disc) }}</td>
+                    <td class="text-success fw-bold">{{ "{:,.2f}".format(r[13] | float) }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="11" class="text-muted py-4">ยังไม่มีรายการบันทึกบิลในงวดนี้</td></tr>
                 {% endfor %}
             </tbody>
         </table>
@@ -876,7 +930,6 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
         conn = connect_db()
         c = conn.cursor()
         
-        # ดึงอัตราจ่ายและส่วนลดแยกประเภทจากฐานข้อมูลลูกค้า
         pay_3d, pay_3tod, pay_2d = 500.0, 100.0, 70.0
         disc_total, disc_3d, disc_2d = 0.0, 0.0, 0.0
         
@@ -908,7 +961,6 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
                 for n in hold_nums:
                     if len(n) == 3:
                         if top > 0:
-                            # ใช้ส่วนลด 3 ตัว หากไม่มีให้ใช้ส่วนลดรวม
                             d_rate = disc_3d if disc_3d > 0 else disc_total
                             disc_amt = top * (d_rate / 100.0)
                             net_amt = top - disc_amt
@@ -922,7 +974,6 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
                                       (user, c_id, c_type, n, bot, "3ตัวโต๊ด", pay_3tod, disc_amt, net_amt, "ปกติ"))
                     elif len(n) == 2:
                         if top > 0:
-                            # ใช้ส่วนลด 2 ตัว หากไม่มีให้ใช้ส่วนลดรวม
                             d_rate = disc_2d if disc_2d > 0 else disc_total
                             disc_amt = top * (d_rate / 100.0)
                             net_amt = top - disc_amt
@@ -988,6 +1039,24 @@ def audit_all_page(user: str, draw: str):
         conn.close()
 
         content = Template(AUDIT_ALL_CONTENT).render(audit_rows=audit_rows)
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@app.get("/audit-discount", response_class=HTMLResponse)
+def audit_discount_page(user: str, draw: str):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role_res = c.fetchone()
+        role = role_res[0] if role_res else "Member"
+        
+        c.execute("SELECT * FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) ORDER BY id DESC", (draw, f"%{draw}%"))
+        discount_rows = c.fetchall()
+        conn.close()
+
+        content = Template(AUDIT_DISCOUNT_CONTENT).render(discount_rows=discount_rows, draw_date=draw)
         return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
     except Exception as e:
         return f"Error: {str(e)}"
