@@ -618,7 +618,7 @@ RESULTS_CONTENT = """
                     <td><span class="badge bg-secondary">{{ s[1] }}</span></td>
                     <td>{{ s[2] }}</td>
                     <td>{{ "{:,.2f}".format(s[3] | float) }}</td>
-                    <td class="text-danger">{{ "{:,.2f}".format(s[4] | float) }}</td>
+                    <td class="text-danger fw-bold">{{ "{:,.2f}".format(s[4] | float) }}</td>
                     <td class="text-success fw-bold">{{ "{:,.2f}".format(s[5] | float) }}</td>
                 </tr>
                 {% else %}
@@ -662,10 +662,15 @@ RESULTS_CONTENT = """
 """
 
 CUSTOMER_CONTENT = """
-{% if incomplete_count > 0 %}
+{% if incomplete_customers %}
 <div class="alert alert-danger border border-danger shadow p-3 mb-4 rounded">
-    <h5 class="fw-bold text-danger"><i class="fa-solid fa-triangle-exclamation"></i> แจ้งเตือน: พบข้อมูลลูกค้าในระบบจำนวน {{ incomplete_count }} รายการที่มีข้อมูลส่วนลดหรืออัตราจ่ายไม่ครบถ้วน!</h5>
-    <p class="mb-1 text-dark">กรุณาตรวจสอบแถวที่มีสถานะเตือนสีแดง และคลิกปุ่ม <b>"✏️ แก้ไข"</b> เพื่อกรอกข้อมูลส่วนลดและอัตราจ่ายรางวัลให้ครบถ้วนตามกฎระเบียบของระบบ</p>
+    <h5 class="fw-bold text-danger"><i class="fa-solid fa-triangle-exclamation"></i> แจ้งเตือน: พบรายชื่อลูกค้าและสายงานที่ข้อมูล "ส่วนลด" หรือ "อัตราจ่ายรางวัล" ยังไม่ครบถ้วน จำนวน {{ incomplete_customers | length }} รายการ</h5>
+    <p class="mb-2 text-dark">กรุณาดำเนินการคลิกปุ่ม <b>"✏️ แก้ไข"</b> ที่รายชื่อด้านล่างนี้เพื่อเติมข้อมูลให้ครบถ้วนสมบูรณ์ตามกฎของระบบ:</p>
+    <ul class="mb-0 fw-bold text-danger">
+        {% for inc in incomplete_customers %}
+            <li>ลูกค้า: {{ inc[1] }} (รหัส ID: {{ inc[0] }}) — <i>สถานะ: ขาดข้อมูลส่วนลดหรืออัตราจ่ายรางวัล</i></li>
+        {% endfor %}
+    </ul>
 </div>
 {% endif %}
 
@@ -679,7 +684,7 @@ CUSTOMER_CONTENT = """
                     <input type="hidden" name="draw" value="{{ draw_date }}">
                     <input type="hidden" name="customer_id" value="{{ edit_customer[0] }}">
                     <div class="mb-3">
-                        <label class="form-label fw-bold text-dark">ชื่อลูกค้า:</label>
+                        <label class="form-label fw-bold text-dark">ชื่อลูกค้า *:</label>
                         <input type="text" name="name" class="form-control" value="{{ edit_customer[1] }}" required>
                     </div>
                     <div class="mb-3">
@@ -1353,6 +1358,7 @@ def results_page(user: str, draw: str):
                 winners.append((cname, uname, clean_num, clean_type, amt_val, rate_val, payout))
                 total_payout += payout
 
+        # แก้ไขให้ดึง SUM(discount) มาแสดงในตารางรายละเอียดยอดขายแยกตามลูกค้าได้อย่างถูกต้องสมบูรณ์
         c.execute("SELECT customer_name, username, COUNT(DISTINCT bill_no), SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY customer_name, username", (draw, f"%{draw}%"))
         sales_breakdown = c.fetchall()
 
@@ -1395,14 +1401,11 @@ def customers_page(user: str, draw: str, msg: str = None, error: str = None, edi
             c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d, disc_3d, disc_2d FROM Customers")
             custs_list = c.fetchall()
             
-        # ตรวจสอบว่ามีรายการใดข้อมูลไม่ครบถ้วนหรือไม่
-        incomplete_count = 0
+        # ตรวจสอบและรวบรวมรายชื่อลูกค้าที่มีข้อมูลไม่ครบถ้วน เพื่อแสดงแจ้งเตือนเรียงลำดับ
+        incomplete_customers = []
         for cust in custs_list:
             if cust[3] is None or cust[4] is None or cust[5] is None or float(cust[3] or 0) <= 0 or float(cust[5] or 0) <= 0:
-                incomplete_count += 1
-            elif (float(cust[2] or 0) <= 0) and (float(cust[6] or 0) <= 0) and (float(cust[7] or 0) <= 0):
-                # ถ้าส่วนลดเป็น 0 ทั้งหมด อาจเตือนด้วย
-                pass
+                incomplete_customers.append(cust)
 
         edit_customer = None
         if edit_id:
@@ -1412,7 +1415,7 @@ def customers_page(user: str, draw: str, msg: str = None, error: str = None, edi
         conn.close()
         content = Template(CUSTOMER_CONTENT).render(
             username=user, draw_date=draw, customers_list=custs_list, 
-            edit_customer=edit_customer, incomplete_count=incomplete_count
+            edit_customer=edit_customer, incomplete_customers=incomplete_customers
         )
         return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content, msg=msg, error=error)
     except Exception as e:
@@ -1420,7 +1423,6 @@ def customers_page(user: str, draw: str, msg: str = None, error: str = None, edi
 
 @app.post("/save-customer")
 def save_customer(user: str = Form(...), draw: str = Form(...), name: str = Form(...), disc_total: float = Form(0), disc_3d: float = Form(0), disc_2d: float = Form(0), pay_3d: float = Form(0), pay_3tod: float = Form(0), pay_2d: float = Form(0)):
-    # กฎบังคับ: ต้องกำหนดอัตราจ่ายรางวัลและส่วนลดให้ครบถ้วน ห้ามเป็นค่าว่างหรือ <= 0
     if not name or pay_3d is None or pay_3tod is None or pay_2d is None or pay_3d <= 0 or pay_3tod <= 0 or pay_2d <= 0:
         return RedirectResponse(url=f"/customers?user={user}&draw={draw}&error=กรุณากรอกข้อมูล ส่วนลด, อัตราจ่ายรางวัล ให้ครบถ้วน", status_code=status.HTTP_303_SEE_OTHER)
 
