@@ -58,7 +58,6 @@ def startup_db():
         """)
         conn.commit()
 
-        # ตรวจสอบและเพิ่มคอลัมน์ส่วนลดและอัตราจ่ายใน Users (ถ้ายังไม่มี) เพื่อรองรับฟีเจอร์ใหม่
         migrations = [
             "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ปกติ';",
             "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS amt_teng NUMERIC DEFAULT 0;",
@@ -591,7 +590,7 @@ RESULTS_CONTENT = """
     <div class="table-responsive mb-5">
         <table class="table table-striped table-bordered text-center align-middle">
             <thead class="table-dark">
-                <tr><th>ผู้ซื้อ / ลูกค้า</th><th>ผู้บันทึก (Agent)</th><th>เลขที่ซื้อ</th><th>ประเภท</th><th>ยอดซื้อ</th><th>อัตราจ่าย</th><th>เงินรางวัลที่ได้รับ</th></tr>
+                <tr><th>ผู้ซื้อ / ลูกค้า</th><th>ผู้บันทึก (Agent)</th><th>เลขที่ซื้อ</th><th>ประเภท</th><th>ยอดซื้อ</th><th>อัตราจ่าย (เรตล่าสุด)</th><th>เงินรางวัลที่ได้รับ</th></tr>
             </thead>
             <tbody>
                 {% for w in winners %}
@@ -758,7 +757,6 @@ CUSTOMER_CONTENT = """
 </div>
 """
 
-# เพิ่มฟิลด์ตั้งค่าส่วนลดและอัตราจ่ายในหน้าสร้างสายงานสมาชิก
 USERS_CONTENT = """
 <div class="row">
     <div class="col-md-5 mb-4">
@@ -1300,8 +1298,9 @@ def results_page(user: str, draw: str):
             if b_status != "ปิดรับ" and b_num:
                 half_pay_numbers.add(str(b_num).strip())
 
-        c.execute("SELECT id, name, pay_3d, pay_3tod, pay_2d FROM Customers")
+        # โหลดเรตอัตราจ่ายล่าสุดจากตาราง Customers และ Users โดยตรงแบบ Real-time
         customer_rates = {}
+        c.execute("SELECT id, name, pay_3d, pay_3tod, pay_2d FROM Customers")
         for cust in c.fetchall():
             c_id_key, c_name_key, p3d, p3tod, p2d = cust[0], cust[1], cust[2], cust[3], cust[4]
             customer_rates[str(c_id_key)] = {"pay_3d": float(p3d or 500), "pay_3tod": float(p3tod or 100), "pay_2d": float(p2d or 70)}
@@ -1332,21 +1331,21 @@ def results_page(user: str, draw: str):
             clean_num = str(num).strip()
             clean_type = str(ttype).strip()
             
-            rate_val = float(rate or 0)
+            # บังคับดึงเรตล่าสุดจากฐานข้อมูลลูกค้า/ผู้ใช้โดยตรง (Override เก่าด้วยเรตปัจจุบัน 100%)
+            rate_val = 0.0
+            if str(cid) in customer_rates:
+                if "3ตัวตรง" in clean_type: rate_val = customer_rates[str(cid)]["pay_3d"]
+                elif "3ตัวโต๊ด" in clean_type: rate_val = customer_rates[str(cid)]["pay_3tod"]
+                elif "2ตัว" in clean_type: rate_val = customer_rates[str(cid)]["pay_2d"]
+            elif str(cname).strip() in customer_rates:
+                if "3ตัวตรง" in clean_type: rate_val = customer_rates[str(cname).strip()]["pay_3d"]
+                elif "3ตัวโต๊ด" in clean_type: rate_val = customer_rates[str(cname).strip()]["pay_3tod"]
+                elif "2ตัว" in clean_type: rate_val = customer_rates[str(cname).strip()]["pay_2d"]
+            
             if rate_val <= 0:
-                if str(cid) in customer_rates:
-                    if "3ตัวตรง" in clean_type: rate_val = customer_rates[str(cid)]["pay_3d"]
-                    elif "3ตัวโต๊ด" in clean_type: rate_val = customer_rates[str(cid)]["pay_3tod"]
-                    elif "2ตัว" in clean_type: rate_val = customer_rates[str(cid)]["pay_2d"]
-                elif str(cname).strip() in customer_rates:
-                    if "3ตัวตรง" in clean_type: rate_val = customer_rates[str(cname).strip()]["pay_3d"]
-                    elif "3ตัวโต๊ด" in clean_type: rate_val = customer_rates[str(cname).strip()]["pay_3tod"]
-                    elif "2ตัว" in clean_type: rate_val = customer_rates[str(cname).strip()]["pay_2d"]
-                
-                if rate_val <= 0:
-                    if clean_type == "3ตัวตรง": rate_val = 500.0
-                    elif clean_type == "3ตัวโต๊ด": rate_val = 100.0
-                    elif clean_type in ["2ตัวบน", "2ตัวล่าง"]: rate_val = 70.0
+                if clean_type == "3ตัวตรง": rate_val = 500.0
+                elif clean_type == "3ตัวโต๊ด": rate_val = 100.0
+                elif clean_type in ["2ตัวบน", "2ตัวล่าง"]: rate_val = 70.0
 
             is_winner = False
             if clean_type == "3ตัวตรง" and prize_1 and clean_num == prize_1:
@@ -1515,7 +1514,7 @@ def update_password(user: str = Form(...), draw: str = Form(...), old_password: 
         c.execute("UPDATE Users SET password=%s WHERE username=%s", (new_password, user))
         conn.commit()
         conn.close()
-        return RedirectResponse(url=f"/password?user={user}&draw={draw}&msg=เปลี่ยนรหัสผ่านสำเร็จ!", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url=f"/password?user={user}&draw={draw}&error=เปลี่ยนรหัสผ่านสำเร็จ!", status_code=status.HTTP_303_SEE_OTHER)
     except Exception as e:
         return RedirectResponse(url=f"/password?user={user}&draw={draw}&error=เกิดข้อผิดพลาด: {str(e)}", status_code=status.HTTP_303_SEE_OTHER)
 
