@@ -1080,17 +1080,16 @@ def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = 
         conn = connect_db()
         c = conn.cursor()
         
-        # ทำความสะอาดและแยกรหัสตัวเลขดิบที่ผู้ใช้ป้อนเข้ามา
+        # ทำความสะอาดและแยกชุดข้อมูลดิบที่พิมพ์ต่อเนื่อง (รองรับทั้งจุลภาคและขึ้นบรรทัดใหม่)
         cleaned = raw_input.replace('\r\n', ',').replace('\n', ',').replace(' ', ',')
         raw_numbers = [item.strip() for item in cleaned.split(',') if item.strip()]
         
         for num_str in raw_numbers:
             if status == "ปิดรับ":
-                # บันทึกเลขปิดรับตรงๆ ตามที่กรอก
                 c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type) VALUES (%s, %s, %s, %s)", 
                           (draw.strip(), num_str, status, type))
             else:
-                # กรณีจ่ายครึ่ง (ทำทุกกลับ/สลับตำแหน่งอัตโนมัติ)
+                # ทำสลับตำแหน่งอัตโนมัติ (ทุกกลับ / ตัวกลับ)
                 perms = set("".join(p) for p in itertools.permutations(num_str))
                 for p_num in perms:
                     c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type) VALUES (%s, %s, %s, %s)", 
