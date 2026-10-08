@@ -318,29 +318,29 @@ BLOCKED_TEMPLATE = """
 <div class="row">
     <div class="col-md-5 mb-4">
         <div class="card shadow p-4">
-            <h4 class="text-danger mb-3 fw-bold">🚫 เพิ่มเลขอั้นประจำงวด</h4>
+            <h4 class="text-danger mb-3 fw-bold">🚫 จัดการและนำเข้าเลขอั้นประจำงวด</h4>
             <form method="POST" action="/save-blocked">
                 <input type="hidden" name="user" value="{{ username }}">
                 <input type="hidden" name="draw" value="{{ draw_date }}">
                 <div class="mb-3">
-                    <label class="form-label fw-bold text-dark">หมายเลขเลขอั้น:</label>
-                    <input type="text" name="raw_num" class="form-control" placeholder="เช่น 123 หรือ 45" required autofocus>
+                    <label class="form-label fw-bold text-dark">ข้อมูลดิบเลขอั้น (รองรับคั่นด้วยจุลภาคหรือขึ้นบรรทัดใหม่):</label>
+                    <textarea name="raw_input" class="form-control" rows="4" placeholder="เช่น 123, 45, 789" required autofocus></textarea>
                 </div>
                 <div class="mb-3">
                     <label class="form-label fw-bold text-dark">สถานะเลขอั้น:</label>
                     <select name="status" class="form-select">
                         <option value="ปิดรับ">ปิดรับ (ห้ามแทง)</option>
-                        <option value="จ่ายครึ่ง">จ่ายครึ่ง (เลขอั้นจ่าย 50%)</option>
+                        <option value="จ่ายครึ่ง">จ่ายครึ่ง (เลขอั้นจ่าย 50% ทุกกลับ/ตัวกลับ)</option>
                     </select>
                 </div>
                 <div class="mb-3">
                     <label class="form-label fw-bold text-dark">ประเภท:</label>
                     <select name="type" class="form-select">
-                        <option value="3ตัว">3 ตัว</option>
-                        <option value="2ตัว">2 ตัว</option>
+                        <option value="3ตัว">3 ตัว (สลับตำแหน่งอัตโนมัติ)</option>
+                        <option value="2ตัว">2 ตัว (สลับตำแหน่งอัตโนมัติ)</option>
                     </select>
                 </div>
-                <button type="submit" class="btn btn-danger w-100 fw-bold">💾 บันทึกเลขอั้น</button>
+                <button type="submit" class="btn btn-danger w-100 fw-bold py-2">💾 ประมวลผลและบันทึกเลขอั้น</button>
             </form>
         </div>
     </div>
@@ -458,9 +458,9 @@ BUY_CONTENT = """
             <h5 class="text-danger fw-bold mb-3">🚫 เลขอั้น (งวดปัจจุบัน)</h5>
             <label class="fw-bold text-dark mb-1">เลขอั้นปิดรับ:</label>
             <textarea class="form-control mb-2 bg-light text-danger fw-bold" rows="3" readonly>{{ block_closed }}</textarea>
-            <label class="fw-bold text-dark mb-1">เลขอั้น 3 ตัว (จ่ายครึ่ง):</label>
+            <label class="fw-bold text-dark mb-1">เลขอั้น 3 ตัว ตรง-โต๊ด ทุกกลับ (จ่ายครึ่ง):</label>
             <textarea class="form-control mb-2 bg-light text-dark" rows="4" readonly>{{ block_3d }}</textarea>
-            <label class="fw-bold text-dark mb-1">เลขอั้น 2 ตัว (จ่ายครึ่ง):</label>
+            <label class="fw-bold text-dark mb-1">เลขอั้น 2 ตัวบน-ล่าง และตัวกลับ (จ่ายครึ่ง):</label>
             <textarea class="form-control bg-light text-dark" rows="4" readonly>{{ block_2d }}</textarea>
         </div>
     </div>
@@ -1075,16 +1075,34 @@ def blocked_numbers_page(user: str, draw: str, msg: str = None, error: str = Non
         return f"Error: {str(e)}"
 
 @app.post("/save-blocked")
-def save_blocked(user: str = Form(...), draw: str = Form(...), raw_num: str = Form(...), status: str = Form(...), type: str = Form(...)):
+def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = Form(...), status: str = Form(...), type: str = Form(...)):
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type) VALUES (%s, %s, %s, %s)", (draw.strip(), raw_num.strip(), status, type))
+        
+        # ทำความสะอาดและแยกรหัสตัวเลขดิบที่ผู้ใช้ป้อนเข้ามา
+        cleaned = raw_input.replace('\r\n', ',').replace('\n', ',').replace(' ', ',')
+        raw_numbers = [item.strip() for item in cleaned.split(',') if item.strip()]
+        
+        for num_str in raw_numbers:
+            if status == "ปิดรับ":
+                # บันทึกเลขปิดรับตรงๆ ตามที่กรอก
+                c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type) VALUES (%s, %s, %s, %s)", 
+                          (draw.strip(), num_str, status, type))
+            else:
+                # กรณีจ่ายครึ่ง (ทำทุกกลับ/สลับตำแหน่งอัตโนมัติ)
+                perms = set("".join(p) for p in itertools.permutations(num_str))
+                for p_num in perms:
+                    c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type) VALUES (%s, %s, %s, %s)", 
+                              (draw.strip(), p_num, status, type))
+                              
         conn.commit()
         conn.close()
     except Exception as e:
         print("Save Blocked Error:", e)
-    return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&msg=บันทึกเลขอั้นสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
+        return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&error=เกิดข้อผิดพลาด: {str(e)}", status_code=status.HTTP_303_SEE_OTHER)
+        
+    return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&msg=ประมวลผลและบันทึกเลขอั้นสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/delete-blocked")
 def delete_blocked(id: int, user: str, draw: str):
