@@ -41,6 +41,15 @@ def startup_db():
             );
         """)
         c.execute("""
+            CREATE TABLE IF NOT EXISTS BlockedNumbers (
+                id SERIAL PRIMARY KEY,
+                draw_date TEXT,
+                raw_num TEXT,
+                status TEXT,
+                type TEXT
+            );
+        """)
+        c.execute("""
             CREATE TABLE IF NOT EXISTS TempDraft (
                 id SERIAL PRIMARY KEY,
                 username TEXT,
@@ -205,6 +214,7 @@ LAYOUT = """
             <a href="/campaigns?user={{ username }}" class="sidebar-menu-item">▶ หวยรัฐบาล</a>
             <a href="/campaigns?user={{ username }}" class="sidebar-menu-item">▶ หวยลาว</a>
             <a href="/campaigns?user={{ username }}" class="sidebar-menu-item">▶ หวยหุ้น</a>
+            <a href="/blocked-numbers?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item text-warning fw-bold">🚫 จัดการเลขอั้น</a>
 
             <div class="sidebar-section-title">รายงาน</div>
             <a href="/results?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ ชนะ แพ้ (รายละเอียด)</a>
@@ -299,6 +309,66 @@ CAMPAIGN_TEMPLATE = """
             {% else %}
                 <div class="text-center text-muted py-4">ยังไม่มีงวดหวยในฐานข้อมูล</div>
             {% endfor %}
+        </div>
+    </div>
+</div>
+"""
+
+BLOCKED_TEMPLATE = """
+<div class="row">
+    <div class="col-md-5 mb-4">
+        <div class="card shadow p-4">
+            <h4 class="text-danger mb-3 fw-bold">🚫 เพิ่มเลขอั้นประจำงวด</h4>
+            <form method="POST" action="/save-blocked">
+                <input type="hidden" name="user" value="{{ username }}">
+                <input type="hidden" name="draw" value="{{ draw_date }}">
+                <div class="mb-3">
+                    <label class="form-label fw-bold text-dark">หมายเลขเลขอั้น:</label>
+                    <input type="text" name="raw_num" class="form-control" placeholder="เช่น 123 หรือ 45" required autofocus>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold text-dark">สถานะเลขอั้น:</label>
+                    <select name="status" class="form-select">
+                        <option value="ปิดรับ">ปิดรับ (ห้ามแทง)</option>
+                        <option value="จ่ายครึ่ง">จ่ายครึ่ง (เลขอั้นจ่าย 50%)</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold text-dark">ประเภท:</label>
+                    <select name="type" class="form-select">
+                        <option value="3ตัว">3 ตัว</option>
+                        <option value="2ตัว">2 ตัว</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-danger w-100 fw-bold">💾 บันทึกเลขอั้น</button>
+            </form>
+        </div>
+    </div>
+    <div class="col-md-7">
+        <div class="card shadow p-4">
+            <h4 class="text-primary mb-3 fw-bold">📋 รายการเลขอั้นงวด: {{ draw_date }}</h4>
+            <div class="table-responsive">
+                <table class="table table-striped table-bordered text-center align-middle">
+                    <thead class="table-dark">
+                        <tr><th>ID</th><th>หมายเลข</th><th>สถานะ</th><th>ประเภท</th><th>จัดการ</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for b in blocked_list %}
+                        <tr>
+                            <td>{{ b[0] }}</td>
+                            <td><b class="text-danger fs-5">{{ b[2] }}</b></td>
+                            <td><span class="badge {% if b[3] == 'ปิดรับ' %}bg-danger{% else %}bg-warning text-dark{% endif %}">{{ b[3] }}</span></td>
+                            <td>{{ b[4] }}</td>
+                            <td>
+                                <a href="/delete-blocked?id={{ b[0] }}&user={{ username }}&draw={{ draw_date }}" class="btn btn-outline-danger btn-sm fw-bold">🗑️ ลบ</a>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="5" class="text-muted py-3">ยังไม่มีเลขอั้นในงวดนี้</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>
@@ -987,6 +1057,46 @@ def toggle_campaign(id: int, user: str):
     except: pass
     return RedirectResponse(url=f"/campaigns?user={user}", status_code=status.HTTP_303_SEE_OTHER)
 
+@app.get("/blocked-numbers", response_class=HTMLResponse)
+def blocked_numbers_page(user: str, draw: str, msg: str = None, error: str = None):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role = c.fetchone()[0]
+
+        c.execute("SELECT id, draw_date, raw_num, status, type FROM BlockedNumbers WHERE draw_date = %s OR draw_date ILIKE %s ORDER BY id DESC", (draw, f"%{draw}%"))
+        blocked_list = c.fetchall()
+        conn.close()
+
+        content = Template(BLOCKED_TEMPLATE).render(username=user, draw_date=draw, blocked_list=blocked_list)
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content, msg=msg, error=error)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@app.post("/save-blocked")
+def save_blocked(user: str = Form(...), draw: str = Form(...), raw_num: str = Form(...), status: str = Form(...), type: str = Form(...)):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type) VALUES (%s, %s, %s, %s)", (draw.strip(), raw_num.strip(), status, type))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("Save Blocked Error:", e)
+    return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&msg=บันทึกเลขอั้นสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.get("/delete-blocked")
+def delete_blocked(id: int, user: str, draw: str):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM BlockedNumbers WHERE id = %s", (id,))
+        conn.commit()
+        conn.close()
+    except: pass
+    return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&msg=ลบเลขอั้นสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
+
 @app.get("/buy", response_class=HTMLResponse)
 def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
     try:
@@ -1358,7 +1468,6 @@ def results_page(user: str, draw: str):
                 winners.append((cname, uname, clean_num, clean_type, amt_val, rate_val, payout))
                 total_payout += payout
 
-        # แก้ไขให้ดึง SUM(discount) มาแสดงในตารางรายละเอียดยอดขายแยกตามลูกค้าได้อย่างถูกต้องสมบูรณ์
         c.execute("SELECT customer_name, username, COUNT(DISTINCT bill_no), SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) GROUP BY customer_name, username", (draw, f"%{draw}%"))
         sales_breakdown = c.fetchall()
 
@@ -1401,7 +1510,6 @@ def customers_page(user: str, draw: str, msg: str = None, error: str = None, edi
             c.execute("SELECT id, name, disc_total, pay_3d, pay_3tod, pay_2d, disc_3d, disc_2d FROM Customers")
             custs_list = c.fetchall()
             
-        # ตรวจสอบและรวบรวมรายชื่อลูกค้าที่มีข้อมูลไม่ครบถ้วน เพื่อแสดงแจ้งเตือนเรียงลำดับ
         incomplete_customers = []
         for cust in custs_list:
             if cust[3] is None or cust[4] is None or cust[5] is None or float(cust[3] or 0) <= 0 or float(cust[5] or 0) <= 0:
