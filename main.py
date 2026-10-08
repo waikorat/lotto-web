@@ -18,7 +18,6 @@ def startup_db():
         conn = connect_db()
         c = conn.cursor()
         
-        # สร้างตารางหลักและตาราง TempDraft พร้อมฟิลด์ status และส่วนลดอย่างครบถ้วน
         c.execute("""
             CREATE TABLE IF NOT EXISTS Customers (
                 id SERIAL PRIMARY KEY,
@@ -59,7 +58,7 @@ def startup_db():
         """)
         conn.commit()
 
-        # ทำการตรวจสอบและเพิ่มคอลัมน์พร้อม Commit ทันทีเพื่อป้องกันปัญหาคอลัมน์ไม่มีอยู่จริง
+        # ตรวจสอบและเพิ่มคอลัมน์ส่วนลดและอัตราจ่ายใน Users (ถ้ายังไม่มี) เพื่อรองรับฟีเจอร์ใหม่
         migrations = [
             "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ปกติ';",
             "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS amt_teng NUMERIC DEFAULT 0;",
@@ -69,7 +68,13 @@ def startup_db():
             "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS net NUMERIC DEFAULT 0;",
             "ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_3d NUMERIC DEFAULT 0;",
             "ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_2d NUMERIC DEFAULT 0;",
-            "ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_total NUMERIC DEFAULT 0;"
+            "ALTER TABLE Customers ADD COLUMN IF NOT EXISTS disc_total NUMERIC DEFAULT 0;",
+            "ALTER TABLE Users ADD COLUMN IF NOT EXISTS disc_total NUMERIC DEFAULT 0;",
+            "ALTER TABLE Users ADD COLUMN IF NOT EXISTS disc_3d NUMERIC DEFAULT 0;",
+            "ALTER TABLE Users ADD COLUMN IF NOT EXISTS disc_2d NUMERIC DEFAULT 0;",
+            "ALTER TABLE Users ADD COLUMN IF NOT EXISTS pay_3d NUMERIC DEFAULT 500;",
+            "ALTER TABLE Users ADD COLUMN IF NOT EXISTS pay_3tod NUMERIC DEFAULT 100;",
+            "ALTER TABLE Users ADD COLUMN IF NOT EXISTS pay_2d NUMERIC DEFAULT 70;"
         ]
         for mig in migrations:
             try:
@@ -753,11 +758,12 @@ CUSTOMER_CONTENT = """
 </div>
 """
 
+# เพิ่มฟิลด์ตั้งค่าส่วนลดและอัตราจ่ายในหน้าสร้างสายงานสมาชิก
 USERS_CONTENT = """
 <div class="row">
-    <div class="col-md-4 mb-4">
+    <div class="col-md-5 mb-4">
         <div class="card shadow p-4">
-            <h4 class="text-success mb-3 fw-bold">⚙️ สร้างสายงานสมาชิก</h4>
+            <h4 class="text-success mb-3 fw-bold">⚙️ สร้างสายงานสมาชิก / กำหนดเรต</h4>
             <form method="POST" action="/save-user-level">
                 <input type="hidden" name="user" value="{{ username }}">
                 <input type="hidden" name="draw" value="{{ draw_date }}">
@@ -804,29 +810,55 @@ USERS_CONTENT = """
                         {% endif %}
                     </select>
                 </div>
-                <button type="submit" class="btn btn-success w-100 fw-bold">บันทึกสมาชิกใหม่</button>
+
+                <div class="mb-3 border-top pt-3">
+                    <label class="form-label fw-bold text-primary">💰 กำหนดส่วนลด (%):</label>
+                    <div class="mb-2">
+                        <label class="form-label text-dark small">ส่วนลดรวมทุกประเภท (%):</label>
+                        <input type="number" step="0.01" name="disc_total" class="form-control" value="0">
+                    </div>
+                    <div class="row">
+                        <div class="col"><label class="form-label text-dark small">ส่วนลด 3 ตัว (%):</label><input type="number" step="0.01" name="disc_3d" class="form-control" value="0"></div>
+                        <div class="col"><label class="form-label text-dark small">ส่วนลด 2 ตัว (%):</label><input type="number" step="0.01" name="disc_2d" class="form-control" value="0"></div>
+                    </div>
+                </div>
+
+                <div class="mb-3 border-top pt-3">
+                    <label class="form-label fw-bold text-success">🏆 กำหนดอัตราจ่ายรางวัล:</label>
+                    <div class="row mb-2">
+                        <div class="col"><label class="form-label text-dark small">จ่าย 3 ตัวตรง:</label><input type="number" step="0.01" name="pay_3d" class="form-control" value="500"></div>
+                        <div class="col"><label class="form-label text-dark small">จ่าย 3 ตัวโต๊ด:</label><input type="number" step="0.01" name="pay_3tod" class="form-control" value="100"></div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label text-dark small">จ่าย 2 ตัว (บน/ล่าง):</label><input type="number" step="0.01" name="pay_2d" class="form-control" value="70">
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-success w-100 fw-bold py-2">💾 บันทึกสมาชิกใหม่และเรตเรท</button>
             </form>
         </div>
     </div>
-    <div class="col-md-8">
+    <div class="col-md-7">
         <div class="card shadow p-4">
             <h4 class="text-primary mb-3 fw-bold">🗂️ รายชื่อสมาชิกใต้สายงาน (ดับเบิลคลิกเพื่อเจาะลึกสายงาน)</h4>
             <div class="table-responsive">
-                <table class="table table-striped table-bordered table-hover text-center align-middle">
+                <table class="table table-striped table-bordered table-hover text-center align-middle" style="font-size: 0.9rem;">
                     <thead class="table-dark">
-                        <tr><th>ID</th><th>Username</th><th>Password</th><th>ระดับสิทธิ์</th><th>ผู้ดูแล (Parent)</th></tr>
+                        <tr><th>ID</th><th>Username</th><th>สิทธิ์</th><th>ส่วนลดรวม</th><th>ลด 3/2</th><th>จ่าย 3ตรง</th><th>จ่าย 2ตัว</th></tr>
                     </thead>
                     <tbody>
                         {% for u in users_list %}
                         <tr ondblclick="window.location.href='/users?user={{ u[1] }}&draw={{ draw_date }}'" style="cursor: pointer;" title="ดับเบิลคลิกเพื่อเจาะลึกสายงานของ {{ u[1] }}">
                             <td>{{ u[0] }}</td>
                             <td><b>{{ u[1] }}</b></td>
-                            <td><code>{{ u[4] }}</code></td>
                             <td><span class="badge bg-secondary">{{ u[2] }}</span></td>
-                            <td>{{ u[3] }}</td>
+                            <td>{{ u[5] or 0 }}%</td>
+                            <td><span class="text-danger">{{ u[6] or 0 }}%/{{ u[7] or 0 }}%</span></td>
+                            <td>{{ u[8] or 500 }}</td>
+                            <td>{{ u[10] or 70 }}</td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="5" class="text-muted">ยังไม่มีสมาชิกในสายงาน</td></tr>
+                        <tr><td colspan="7" class="text-muted">ยังไม่มีสมาชิกในสายงาน</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -1026,6 +1058,16 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
                 disc_total = float(res[3]) if res[3] is not None else 0.0
                 disc_3d = float(res[4]) if res[4] is not None else 0.0
                 disc_2d = float(res[5]) if res[5] is not None else 0.0
+        elif c_type == 'User':
+            c.execute("SELECT pay_3d, pay_3tod, pay_2d, disc_total, disc_3d, disc_2d FROM Users WHERE id=%s", (c_id,))
+            res = c.fetchone()
+            if res:
+                pay_3d = float(res[0]) if res[0] is not None and float(res[0]) > 0 else 500.0
+                pay_3tod = float(res[1]) if res[1] is not None and float(res[1]) > 0 else 100.0
+                pay_2d = float(res[2]) if res[2] is not None and float(res[2]) > 0 else 70.0
+                disc_total = float(res[3]) if res[3] is not None else 0.0
+                disc_3d = float(res[4]) if res[4] is not None else 0.0
+                disc_2d = float(res[5]) if res[5] is not None else 0.0
 
         hold_nums = []
         for block in blocks:
@@ -1088,6 +1130,13 @@ def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: st
         disc_total, disc_3d, disc_2d = 0.0, 0.0, 0.0
         if c_type == 'Customer':
             c.execute("SELECT disc_total, disc_3d, disc_2d FROM Customers WHERE id=%s", (c_id,))
+            c_res = c.fetchone()
+            if c_res:
+                disc_total = float(c_res[0] or 0)
+                disc_3d = float(c_res[1] or 0)
+                disc_2d = float(c_res[2] or 0)
+        elif c_type == 'User':
+            c.execute("SELECT disc_total, disc_3d, disc_2d FROM Users WHERE id=%s", (c_id,))
             c_res = c.fetchone()
             if c_res:
                 disc_total = float(c_res[0] or 0)
@@ -1259,6 +1308,13 @@ def results_page(user: str, draw: str):
             if c_name_key:
                 customer_rates[str(c_name_key).strip()] = {"pay_3d": float(p3d or 500), "pay_3tod": float(p3tod or 100), "pay_2d": float(p2d or 70)}
 
+        c.execute("SELECT id, username, pay_3d, pay_3tod, pay_2d FROM Users")
+        for u_cust in c.fetchall():
+            u_id_key, u_name_key, p3d, p3tod, p2d = u_cust[0], u_cust[1], u_cust[2], u_cust[3], u_cust[4]
+            customer_rates[str(u_id_key)] = {"pay_3d": float(p3d or 500), "pay_3tod": float(p3tod or 100), "pay_2d": float(p2d or 70)}
+            if u_name_key:
+                customer_rates[str(u_name_key).strip()] = {"pay_3d": float(p3d or 500), "pay_3tod": float(p3tod or 100), "pay_2d": float(p2d or 70)}
+
         c.execute("SELECT SUM(amount), SUM(discount), SUM(net) FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw, f"%{draw}%"))
         sales_res = c.fetchone()
         total_sales = float(sales_res[0] or 0) if sales_res and sales_res[0] else 0.0
@@ -1405,7 +1461,7 @@ def users_page(user: str, draw: str, msg: str = None):
         role = role_res[0] if role_res else "Member"
 
         target_user = user
-        c.execute("SELECT id, username, role, parent_user, password FROM Users WHERE parent_user=%s OR username=%s", (target_user, target_user))
+        c.execute("SELECT id, username, role, parent_user, password, disc_total, disc_3d, disc_2d, pay_3d, pay_3tod, pay_2d FROM Users WHERE parent_user=%s OR username=%s", (target_user, target_user))
         users_list = c.fetchall()
         conn.close()
 
@@ -1415,15 +1471,21 @@ def users_page(user: str, draw: str, msg: str = None):
         return f"Error: {str(e)}"
 
 @app.post("/save-user-level")
-def save_user_level(user: str = Form(...), draw: str = Form(...), new_username: str = Form(...), new_password: str = Form(...), new_role: str = Form(...)):
+def save_user_level(user: str = Form(...), draw: str = Form(...), new_username: str = Form(...), new_password: str = Form(...), new_role: str = Form(...), disc_total: float = Form(0), disc_3d: float = Form(0), disc_2d: float = Form(0), pay_3d: float = Form(500), pay_3tod: float = Form(100), pay_2d: float = Form(70)):
     try:
+        final_pay_3d = pay_3d if pay_3d > 0 else 500.0
+        final_pay_3tod = pay_3tod if pay_3tod > 0 else 100.0
+        final_pay_2d = pay_2d if pay_2d > 0 else 70.0
+
         conn = connect_db()
         c = conn.cursor()
-        c.execute("INSERT INTO Users (username, password, role, parent_user) VALUES (%s, %s, %s, %s)", (new_username, new_password, new_role, user))
+        c.execute("INSERT INTO Users (username, password, role, parent_user, disc_total, disc_3d, disc_2d, pay_3d, pay_3tod, pay_2d) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", 
+                  (new_username, new_password, new_role, user, disc_total, disc_3d, disc_2d, final_pay_3d, final_pay_3tod, final_pay_2d))
         conn.commit()
         conn.close()
-    except: pass
-    return RedirectResponse(url=f"/users?user={user}&draw={draw}&msg=สร้างสมาชิกใหม่สำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
+    except Exception as e:
+        print("Save User Level Error:", e)
+    return RedirectResponse(url=f"/users?user={user}&draw={draw}&msg=สร้างสมาชิกใหม่พร้อมเรตส่วนลดสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/password", response_class=HTMLResponse)
 def password_page(user: str, draw: str, msg: str = None, error: str = None):
