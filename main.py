@@ -176,6 +176,7 @@ LAYOUT = """
             {% if role == 'Admin' %}
             <a href="/audit-all?user={{ username }}&draw={{ draw_date }}">🔍 ตรวจสอบการซื้อทั้งหมด</a>
             <a href="/results?user={{ username }}&draw={{ draw_date }}">🏆 ออกผลรางวัล</a>
+            <a href="/db-inspector?user={{ username }}&draw={{ draw_date }}">🗄️ ตรวจสอบฐานข้อมูล</a>
             {% endif %}
             <a href="/password?user={{ username }}&draw={{ draw_date }}">⚙ ตั้งค่าเริ่มต้น</a>
             <a href="/customers?user={{ username }}&draw={{ draw_date }}">👥 จัดการลูกค้า</a>
@@ -216,11 +217,14 @@ LAYOUT = """
             <a href="/campaigns?user={{ username }}" class="sidebar-menu-item">▶ หวยหุ้น</a>
             <a href="/blocked-numbers?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item text-warning fw-bold">🚫 จัดการเลขอั้น</a>
 
-            <div class="sidebar-section-title">รายงาน</div>
+            <div class="sidebar-section-title">รายงานและเครื่องมือ</div>
             <a href="/results?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ ชนะ แพ้ (รายละเอียด)</a>
             <a href="/reports?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ เอเย่นต์</a>
             <a href="/reports?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ สมาชิก</a>
             <a href="/audit-discount?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item text-warning fw-bold">🔍 ตรวจสอบส่วนลดลูกค้า</a>
+            {% if role == 'Admin' %}
+            <a href="/db-inspector?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item text-info fw-bold">🗄️ ตรวจสอบตารางฐานข้อมูล</a>
+            {% endif %}
         </div>
 
         <div class="content-area">
@@ -350,7 +354,7 @@ BLOCKED_TEMPLATE = """
             <div class="table-responsive">
                 <table class="table table-striped table-bordered text-center align-middle">
                     <thead class="table-dark">
-                        <tr><th>ID</th><th>หมายเลข</th><th>สถานะ</th><th>ประเภท</th><th>จัดการ</th></tr>
+                        <tr><th>ID</th><th>ข้อมูลดิบ (Raw Num)</th><th>สถานะ</th><th>ประเภท</th><th>จัดการ</th></tr>
                     </thead>
                     <tbody>
                         {% for b in blocked_list %}
@@ -455,7 +459,7 @@ BUY_CONTENT = """
 
     <div class="col-lg-4">
         <div class="card shadow p-3 bg-white mb-4 border">
-            <h5 class="text-danger fw-bold mb-3">🚫 เลขอั้น (งวดปัจจุบัน)</h5>
+            <h5 class="text-danger fw-bold mb-3">🚫 ข้อมูลดิบเลขอั้น (งวดปัจจุบัน)</h5>
             <label class="fw-bold text-dark mb-1">เลขอั้นปิดรับ:</label>
             <textarea class="form-control mb-2 bg-light text-danger fw-bold" rows="3" readonly>{{ block_closed }}</textarea>
             <label class="fw-bold text-dark mb-1">เลขอั้น 3 ตัว ตรง-โต๊ด ทุกกลับ (จ่ายครึ่ง):</label>
@@ -464,6 +468,52 @@ BUY_CONTENT = """
             <textarea class="form-control bg-light text-dark" rows="4" readonly>{{ block_2d }}</textarea>
         </div>
     </div>
+</div>
+"""
+
+DB_INSPECTOR_TEMPLATE = """
+<div class="card shadow p-4">
+    <h2 class="text-primary mb-3 fw-bold">🗄️ ตรวจสอบตารางฐานข้อมูลในระบบ (Database Inspector)</h2>
+    <p class="text-muted">เลือกตารางฐานข้อมูลที่ต้องการตรวจสอบรายละเอียด (รายชื่อตารางทั้งหมดใน PostgreSQL จะอัปเดตและเพิ่มขยายอัตโนมัติ)</p>
+    
+    <form method="GET" action="/db-inspector" class="row g-3 mb-4 align-items-end">
+        <input type="hidden" name="user" value="{{ username }}">
+        <input type="hidden" name="draw" value="{{ draw_date }}">
+        <div class="col-md-6">
+            <label class="form-label fw-bold text-dark">เลือกตารางฐานข้อมูล:</label>
+            <select name="table_name" class="form-select form-select-lg" onchange="this.form.submit()">
+                {% for t in tables %}
+                    <option value="{{ t }}" {% if selected_table == t %}selected{% endif %}>{{ t }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </form>
+
+    {% if selected_table %}
+        <h4 class="text-success mb-3 fw-bold">📋 ข้อมูลในตาราง: <code>{{ selected_table }}</code> (แสดงผลล่าสุด 100 รายการ)</h4>
+        <div class="table-responsive">
+            <table class="table table-striped table-bordered text-center align-middle" style="font-size: 0.9rem;">
+                <thead class="table-dark">
+                    <tr>
+                        {% for col in columns %}
+                            <th>{{ col }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in rows %}
+                    <tr>
+                        {% for val in r %}
+                            <td>{{ val }}</td>
+                        {% endfor %}
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="{{ columns | length }}" class="text-muted py-4">ตารางนี้ยังไม่มีข้อมูล</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
 </div>
 """
 
@@ -1080,7 +1130,6 @@ def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = 
         conn = connect_db()
         c = conn.cursor()
         
-        # ทำความสะอาดและแยกชุดข้อมูลดิบที่พิมพ์ต่อเนื่อง (รองรับทั้งจุลภาคและขึ้นบรรทัดใหม่)
         cleaned = raw_input.replace('\r\n', ',').replace('\n', ',').replace(' ', ',')
         raw_numbers = [item.strip() for item in cleaned.split(',') if item.strip()]
         
@@ -1089,7 +1138,6 @@ def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = 
                 c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type) VALUES (%s, %s, %s, %s)", 
                           (draw.strip(), num_str, status, type))
             else:
-                # ทำสลับตำแหน่งอัตโนมัติ (ทุกกลับ / ตัวกลับ)
                 perms = set("".join(p) for p in itertools.permutations(num_str))
                 for p_num in perms:
                     c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type) VALUES (%s, %s, %s, %s)", 
@@ -1353,6 +1401,40 @@ def audit_discount_page(user: str, draw: str):
         conn.close()
 
         content = Template(AUDIT_DISCOUNT_CONTENT).render(discount_rows=discount_rows, draw_date=draw)
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+@app.get("/db-inspector", response_class=HTMLResponse)
+def db_inspector_page(user: str, draw: str, table_name: str = None):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role_res = c.fetchone()
+        role = role_res[0] if role_res else "Member"
+        if role != 'Admin':
+            conn.close()
+            return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
+
+        # ดึงรายชื่อตารางทั้งหมดในฐานข้อมูล PostgreSQL แบบไดนามิกอัตโนมัติ
+        c.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;")
+        tables = [row[0] for row in c.fetchall()]
+
+        rows = []
+        columns = []
+        selected_table = table_name if table_name in tables else (tables[0] if tables else None)
+
+        if selected_table:
+            c.execute(f"SELECT * FROM {selected_table} ORDER BY 1 DESC LIMIT 100;")
+            rows = c.fetchall()
+            columns = [desc[0] for desc in c.description]
+
+        conn.close()
+
+        content = Template(DB_INSPECTOR_TEMPLATE).render(
+            tables=tables, selected_table=selected_table, columns=columns, rows=rows, draw_date=draw, username=user
+        )
         return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
     except Exception as e:
         return f"Error: {str(e)}"
