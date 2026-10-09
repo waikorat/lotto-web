@@ -491,7 +491,6 @@ BUY_CONTENT = """
 
     <div class="col-lg-4">
         <div class="card shadow p-3 bg-white mb-4 border">
-            <h5 class="text-danger fw-bold mb-3">🚫 ข้อมูลดิบเลขอั้น (งวดปัจจุบัน)</h5>
             
             <label class="fw-bold text-dark mb-1">เลขอั้นปิดรับ:</label>
             <textarea class="form-control mb-3 bg-light text-danger fw-bold" rows="3" readonly>{{ block_closed }}</textarea>
@@ -1197,6 +1196,7 @@ def blocked_numbers_page(user: str, draw: str, msg: str = None, error: str = Non
 
 @app.post("/save-blocked")
 def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = Form(...), status: str = Form(...)):
+    conn = None
     try:
         conn = connect_db()
         c = conn.cursor()
@@ -1208,11 +1208,9 @@ def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = 
             length = len(num_str)
             t_val = "3ตัว" if length == 3 else ("2ตัว" if length == 2 else "อื่นๆ")
             
-            # บันทึกข้อมูลดิบแท้จริง (is_raw = TRUE)
             c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type, is_raw) VALUES (%s, %s, %s, %s, TRUE)", 
                       (draw.strip(), num_str, status, t_val))
 
-            # ทำการสลับตำแหน่ง (Permutations) อัตโนมัติทุกกรณี
             perms = set("".join(p) for p in itertools.permutations(num_str))
             for p_num in perms:
                 if p_num != num_str:
@@ -1222,7 +1220,10 @@ def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = 
         conn.commit()
         conn.close()
     except Exception as e:
-        print("Save Blocked Error:", e)
+        if conn:
+            conn.rollback()
+            conn.close()
+        print("Save Blocked Error Detail:", str(e))
         return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&error=เกิดข้อผิดพลาด: {str(e)}", status_code=status.HTTP_303_SEE_OTHER)
         
     return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&msg=ประมวลผลและบันทึกเลขอั้นอัตโนมัติสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
