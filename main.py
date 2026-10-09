@@ -429,16 +429,35 @@ BUY_CONTENT = """
                 </div>
             </form>
 
+            <!-- ฟอร์มคีย์ 3 ช่องคอลัมน์ -->
             <form method="POST" action="/add-draft">
                 <input type="hidden" name="user" value="{{ username }}">
                 <input type="hidden" name="draw" value="{{ draw_date }}">
                 <input type="hidden" name="customer_info" id="hiddenCustomerInfo" value="{{ selected_target_raw }}">
+                
+                <div class="mb-2">
+                    <label class="form-label fw-bold text-dark mb-1">เลข 3ตัว / 2ตัว &nbsp;=&nbsp; 3ตัวตรง/ 2ตัวบน &nbsp;&times;&nbsp; 3ตัวโต๊ด/ 2ตัวล่าง</label>
+                    <div class="row g-2 align-items-center mb-2">
+                        <div class="col-md-3">
+                            <input type="text" name="col_num" class="form-control" placeholder="พิมพ์เลข...">
+                        </div>
+                        <div class="col-auto fw-bold fs-5 text-dark">=</div>
+                        <div class="col-md-4">
+                            <input type="number" step="any" name="col_teng" class="form-control" placeholder="จำนวน(บาท)">
+                        </div>
+                        <div class="col-auto fw-bold fs-5 text-dark">&times;</div>
+                        <div class="col-md-4">
+                            <input type="number" step="any" name="col_tod" class="form-control" placeholder="จำนวน(บาท)">
+                        </div>
+                    </div>
+                </div>
+
                 <div class="mb-3">
-                    <label class="form-label fw-bold text-dark">คีย์รายการ (เช่น 123=100*100, 456=50 หรือ 12,34=50):</label>
-                    <input type="text" name="raw_input" class="form-control form-control-lg" placeholder="พิมพ์เลขและราคา..." required autofocus>
+                    <label class="form-label fw-bold text-dark small">คีย์ต่อเนื่อง ใช้ "," คั่น (เช่น 123=100*100, 456=50*0, 57=0*20, 83=20*0 หรือ กรณียอดเท่ากันทุกตัว 123, 379, 388=50*50, 456,12,34=100*50)</label>
+                    <input type="text" name="raw_input" class="form-control" placeholder="พิมพ์เลขและราคา...">
                     <div class="form-text text-danger">*ห้ามใส่ลูกน้ำในยอดเงิน เช่น 1000 ห้ามพิมพ์ 1,000 | อัตราจ่ายห้ามเป็น 0 โดยเด็ดขาด</div>
                 </div>
-                <button type="submit" class="btn btn-success btn-lg w-100 fw-bold">📥 บันทึกลงรายการร่าง</button>
+                <button type="submit" class="btn btn-success btn-lg w-100 fw-bold"><i class="fa-solid fa-cart-plus"></i> บันทึกลงรายการร่าง</button>
             </form>
         </div>
 
@@ -453,7 +472,7 @@ BUY_CONTENT = """
             <div class="table-responsive">
                 <table class="table table-striped table-bordered text-center align-middle">
                     <thead class="table-dark">
-                        <tr><th>เลข</th><th>ประเภท</th><th>ยอดซื้อ</th><th>อัตราจ่ายประจำตัว</th><th>ส่วนลด (%)</th><th>ยอดสุทธิ</th><th>สถานะอั้น</th></tr>
+                        <tr><th>เลข</th><th>ประเภท</th><th>ยอดซื้อ</th><th>อัตราจ่ายประจำตัว</th><th>ส่วนลด (บาท)</th><th>ยอดสุทธิ</th><th>สถานะอั้น</th><th>จัดการ</th></tr>
                     </thead>
                     <tbody>
                         {% for d in drafts %}
@@ -462,12 +481,16 @@ BUY_CONTENT = """
                             <td>{{ d[4] }}</td>
                             <td>{{ "{:,.2f}".format(d[2] | float) }}</td>
                             <td><span class="badge bg-success">{{ d[5] }}</span></td>
-                            <td>{{ d[6] }}%</td>
-                            <td>{{ "{:,.2f}".format(d[7] | float) }}</td>
-                            <td><span class="badge bg-danger">{{ d[3] }}</span></td>
+                            <td class="text-danger">{{ "{:,.2f}".format(d[6] | float) }}</td>
+                            <td class="text-success fw-bold">{{ "{:,.2f}".format(d[7] | float) }}</td>
+                            <td><span class="badge {% if d[3] == 'ปกติ' %}bg-danger{% else %}bg-warning text-dark{% endif %}">{{ d[3] }}</span></td>
+                            <td>
+                                <a href="/edit-draft-item?id={{ d[0] }}&user={{ username }}&draw={{ draw_date }}&selected={{ selected_target_raw }}" class="text-decoration-none fw-bold">แก้ไข</a> / 
+                                <a href="/delete-draft-item?id={{ d[0] }}&user={{ username }}&draw={{ draw_date }}&selected={{ selected_target_raw }}" class="text-danger text-decoration-none fw-bold" onclick="return confirm('ยืนยันการลบรายการนี้?')">ลบ</a>
+                            </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="7" class="text-muted">ยังไม่มีรายการในร่าง</td></tr>
+                        <tr><td colspan="8" class="text-muted">ยังไม่มีรายการในร่าง</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -481,19 +504,26 @@ BUY_CONTENT = """
                     <div class="col text-primary">ยอดสุทธิที่ต้องชำระ: ฿{{ "{:,.2f}".format(draft_totals.sum_net) }}</div>
                 </div>
             </div>
-            <form method="POST" action="/confirm-bill">
-                <input type="hidden" name="user" value="{{ username }}">
-                <input type="hidden" name="draw" value="{{ draw_date }}">
-                <input type="hidden" name="customer_info" value="{{ selected_target_raw }}">
-                <button type="submit" class="btn btn-primary btn-lg w-100 fw-bold">✅ ยืนยันโพยและบันทึกบิลเข้าระบบ</button>
-            </form>
+            
+            <div class="row g-2">
+                <div class="col-md-6">
+                    <form method="POST" action="/confirm-bill">
+                        <input type="hidden" name="user" value="{{ username }}">
+                        <input type="hidden" name="draw" value="{{ draw_date }}">
+                        <input type="hidden" name="customer_info" value="{{ selected_target_raw }}">
+                        <button type="submit" class="btn btn-primary btn-lg w-100 fw-bold"><i class="fa-solid fa-check"></i> ยืนยันโพย</button>
+                    </form>
+                </div>
+                <div class="col-md-6">
+                    <a href="/clear-draft?user={{ username }}&draw={{ draw_date }}&selected={{ selected_target_raw }}" class="btn btn-primary btn-lg w-100 fw-bold" style="background-color: #0d6efd; border-color: #0d6efd;" onclick="return confirm('ยืนยันการยกเลิกรายการร่างทั้งหมด?')">ยกเลิก</a>
+                </div>
+            </div>
             {% endif %}
         </div>
     </div>
 
     <div class="col-lg-4">
         <div class="card shadow p-3 bg-white mb-4 border">
-            
             <label class="fw-bold text-dark mb-1">เลขอั้นปิดรับ:</label>
             <textarea class="form-control mb-3 bg-light text-danger fw-bold" rows="3" readonly>{{ block_closed }}</textarea>
             
@@ -502,6 +532,109 @@ BUY_CONTENT = """
             
             <label class="fw-bold text-dark mb-1">เลขอั้น 2ตัว บน-ล่าง และตัวกลับ(จ่ายครึ่ง):</label>
             <textarea class="form-control bg-light text-dark" rows="3" readonly>{{ block_2d }}</textarea>
+        </div>
+
+        <!-- ตารางรายการล่าสุดฝั่งขวา -->
+        <div class="card shadow p-3 bg-white mb-4 border">
+            <h5 class="text-center fw-bold mb-3">รายการล่าสุด</h5>
+            <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                <table class="table table-sm table-bordered text-center align-middle" style="font-size: 0.8rem;">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>DATE/TIME</th>
+                            <th>เลขที่บิล</th>
+                            <th>เลข</th>
+                            <th>ยอดซื้อ 3ตัวตรง/2ตัวบน</th>
+                            <th>ยอดซื้อ 3ตัวโต๊ด/2ตัวล่าง</th>
+                            <th>ส่วนลด(บาท)</th>
+                            <th>ยอดสุทธิ</th>
+                            <th>อัตราจ่าย</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for tx in recent_transactions %}
+                        <tr>
+                            <td><small>{{ tx[1] }}</small></td>
+                            <td><code>{{ tx[6] }}</code></td>
+                            <td><b>{{ tx[7] }}</b></td>
+                            <td>{% if "ตรง" in tx[8] or "บน" in tx[8] %}{{ "{:,.0f}".format(tx[9] | float) }}{% endif %}</td>
+                            <td>{% if "โต๊ด" in tx[8] or "ล่าง" in tx[8] %}{{ "{:,.0f}".format(tx[9] | float) }}{% endif %}</td>
+                            <td>{{ "{:,.1f}".format(tx[11] | float) }}</td>
+                            <td class="fw-bold">{{ "{:,.1f}".format(tx[12] | float) }}</td>
+                            <td><span class="badge bg-success">{{ tx[13] }}</span></td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="8" class="text-muted">ยังไม่มีรายการซื้อล่าสุด</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+"""
+
+BILL_PRINT_TEMPLATE = """
+<div class="container my-4" style="max-width: 850px;">
+    <div class="card shadow p-4 bg-white border">
+        <div class="d-flex justify-content-between align-items-center mb-3 border-bottom pb-3">
+            <div>
+                <h3 class="text-primary fw-bold mb-0">🎯 {{ lotto_title }}</h3>
+                <h5 class="text-dark mt-1">งวดประจำวันที่ {{ draw_date }}</h5>
+            </div>
+            <div class="text-end">
+                <span class="text-muted">Bill No.</span> <code class="fs-5 text-dark fw-bold">{{ bill_no }}</code>
+                <div class="small text-muted mt-1">วันที่ทำรายการ: {{ timestamp }}</div>
+            </div>
+        </div>
+
+        <div class="row mb-4 bg-light p-3 rounded border">
+            <div class="col-md-6">
+                <div class="text-dark">ชื่อลูกค้า: <b>{{ customer_name }} (Customer)</b></div>
+            </div>
+            <div class="col-md-6 text-md-end">
+                <div class="text-dark">ผู้บันทึก: <b>{{ username }} ({{ role }})</b></div>
+            </div>
+        </div>
+
+        <div class="table-responsive mb-4">
+            <table class="table table-striped table-bordered text-center align-middle">
+                <thead class="table-dark">
+                    <tr>
+                        <th>เลข 3ตัว / 2ตัว</th>
+                        <th>ยอดซื้อ 3ตัวตรง / 2ตัวบน</th>
+                        <th>ยอดซื้อ 3ตัวโต๊ด / 2ตัวล่าง</th>
+                        <th>ส่วนลด (บาท)</th>
+                        <th>ยอดสุทธิ</th>
+                        <th>อัตราจ่าย</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in bill_items %}
+                    <tr>
+                        <td><b class="fs-5 text-primary">{{ item.num }}</b></td>
+                        <td>{{ "{:,.2f}".format(item.amt_teng) if item.amt_teng > 0 else "-" }}</td>
+                        <td>{{ "{:,.2f}".format(item.amt_tod) if item.amt_tod > 0 else "-" }}</td>
+                        <td class="text-danger">{{ "{:,.2f}".format(item.discount) }}</td>
+                        <td class="text-success fw-bold">{{ "{:,.2f}".format(item.net) }}</td>
+                        <td><span class="badge bg-success">{{ item.payout_rate }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card bg-light p-3 mb-4 border">
+            <div class="row text-center fw-bold text-dark fs-5">
+                <div class="col">ยอดซื้อรวม: ฿{{ "{:,.2f}".format(total_amt) }}</div>
+                <div class="col text-danger">ส่วนลดรวม: ฿{{ "{:,.2f}".format(total_disc) }}</div>
+                <div class="col text-primary">ยอดสุทธิรวม: ฿{{ "{:,.2f}".format(total_net) }}</div>
+            </div>
+        </div>
+
+        <div class="d-flex gap-3">
+            <a href="/buy?user={{ username }}&draw={{ draw_date }}" class="btn btn-primary btn-lg w-100 fw-bold">⬅️ กลับไปหน้าบันทึกโพย</a>
+            <button onclick="window.print()" class="btn btn-outline-dark btn-lg px-4 fw-bold">🖨️ พิมพ์บิล</button>
         </div>
     </div>
 </div>
@@ -1105,6 +1238,19 @@ def get_blocked_display_data(draw_date):
         print("Get Blocked Display Error:", e)
         return "", "", ""
 
+def check_number_blocked_status(draw_date, num_str):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT status FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s) AND raw_num = %s", (draw_date, f"%{draw_date}%", num_str))
+        res = c.fetchone()
+        conn.close()
+        if res:
+            return res[0] # "ปิดรับ" หรือ "จ่ายครึ่ง"
+        return "ปกติ"
+    except:
+        return "ปกติ"
+
 # ================= Routes =================
 
 @app.get("/", response_class=HTMLResponse)
@@ -1313,13 +1459,20 @@ def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
                 sum_disc += float(row[6] or 0)
                 sum_net += float(row[7] or 0)
 
+        # ดึงรายการล่าสุด (Transactions)
+        if role == 'Admin':
+            c.execute("SELECT * FROM Transactions WHERE (draw_date = %s OR draw_date ILIKE %s) ORDER BY id DESC LIMIT 20", (draw, f"%{draw}%"))
+        else:
+            c.execute("SELECT * FROM Transactions WHERE ((draw_date = %s OR draw_date ILIKE %s) AND username = %s) ORDER BY id DESC LIMIT 20", (draw, f"%{draw}%", user))
+        recent_transactions = c.fetchall()
+
         conn.close()
         b_closed, b_3d, b_2d = get_blocked_display_data(draw)
 
         content = Template(BUY_CONTENT).render(
             username=user, draw_date=draw, customers=all_targets, selected_target_raw=selected, 
             selected_c_id=selected_c_id, drafts=drafts, draft_totals={"sum_amt": sum_amt, "sum_disc": sum_disc, "sum_net": sum_net},
-            block_closed=b_closed, block_3d=b_3d, block_2d=b_2d
+            block_closed=b_closed, block_3d=b_3d, block_2d=b_2d, recent_transactions=recent_transactions
         )
         return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content, msg=msg)
     except Exception as e:
@@ -1330,11 +1483,9 @@ def submit_buy(user: str = Form(...), draw: str = Form(...), customer_info: str 
     return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={customer_info}", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.post("/add-draft")
-def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str = Form(...), raw_input: str = Form(...)):
+def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str = Form(...), col_num: str = Form(None), col_teng: float = Form(0), col_tod: float = Form(0), raw_input: str = Form(None)):
     parts = customer_info.split('|')
     c_id, c_type = parts[0], parts[2]
-    raw_input = raw_input.strip().upper().replace(' ', '').replace('X', '*').replace('+', '*').replace('/', '*')
-    blocks = raw_input.split(',')
     
     try:
         conn = connect_db()
@@ -1364,57 +1515,194 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
                 disc_3d = float(res[4]) if res[4] is not None else 0.0
                 disc_2d = float(res[5]) if res[5] is not None else 0.0
 
-        hold_nums = []
-        for block in blocks:
-            if not block: continue
-            if '=' in block:
-                num_str, amt_str = block.split('=')[0].strip(), block.split('=')[1].strip()
-                if num_str: hold_nums.append(num_str)
-                if '*' in amt_str:
-                    ap = amt_str.split('*')
-                    top = float(ap[0]) if ap[0].strip() else 0.0
-                    bot = float(ap[1]) if ap[1].strip() else 0.0
+        # จัดการข้อมูลจากฟอร์ม 3 คอลัมน์ด้านบน
+        if col_num and col_num.strip():
+            n_str = col_num.strip()
+            length = len(n_str)
+            b_status = check_number_blocked_status(draw, n_str)
+            
+            if length == 3:
+                if col_teng > 0:
+                    d_rate = disc_3d if disc_3d > 0 else disc_total
+                    disc_amt = col_teng * (d_rate / 100.0)
+                    net_amt = col_teng - disc_amt
+                    c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                              (user, c_id, c_type, n_str, col_teng, "3ตัวตรง", pay_3d, disc_amt, net_amt, b_status))
+                if col_tod > 0:
+                    d_rate = disc_3d if disc_3d > 0 else disc_total
+                    disc_amt = col_tod * (d_rate / 100.0)
+                    net_amt = col_tod - disc_amt
+                    c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                              (user, c_id, c_type, n_str, col_tod, "3ตัวโต๊ด", pay_3tod, disc_amt, net_amt, b_status))
+            elif length == 2:
+                if col_teng > 0:
+                    d_rate = disc_2d if disc_2d > 0 else disc_total
+                    disc_amt = col_teng * (d_rate / 100.0)
+                    net_amt = col_teng - disc_amt
+                    c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                              (user, c_id, c_type, n_str, col_teng, "2ตัวบน", pay_2d, disc_amt, net_amt, b_status))
+                if col_tod > 0:
+                    d_rate = disc_2d if disc_2d > 0 else disc_total
+                    disc_amt = col_tod * (d_rate / 100.0)
+                    net_amt = col_tod - disc_amt
+                    c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                              (user, c_id, c_type, n_str, col_tod, "2ตัวล่าง", pay_2d, disc_amt, net_amt, b_status))
+
+        # จัดการข้อมูลจากช่องคีย์ต่อเนื่อง
+        if raw_input and raw_input.strip():
+            clean_raw = raw_input.strip().upper().replace(' ', '').replace('X', '*').replace('+', '*').replace('/', '*')
+            blocks = clean_raw.split(',')
+            hold_nums = []
+            for block in blocks:
+                if not block: continue
+                if '=' in block:
+                    num_str, amt_str = block.split('=')[0].strip(), block.split('=')[1].strip()
+                    if num_str: hold_nums.append(num_str)
+                    if '*' in amt_str:
+                        ap = amt_str.split('*')
+                        top = float(ap[0]) if ap[0].strip() else 0.0
+                        bot = float(ap[1]) if ap[1].strip() else 0.0
+                    else:
+                        top = float(amt_str) if amt_str.strip() else 0.0
+                        bot = 0.0
+                    
+                    for n in hold_nums:
+                        b_status = check_number_blocked_status(draw, n)
+                        if len(n) == 3:
+                            if top > 0:
+                                d_rate = disc_3d if disc_3d > 0 else disc_total
+                                disc_amt = top * (d_rate / 100.0)
+                                net_amt = top - disc_amt
+                                c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                                          (user, c_id, c_type, n, top, "3ตัวตรง", pay_3d, disc_amt, net_amt, b_status))
+                            if bot > 0:
+                                d_rate = disc_3d if disc_3d > 0 else disc_total
+                                disc_amt = bot * (d_rate / 100.0)
+                                net_amt = bot - disc_amt
+                                c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                                          (user, c_id, c_type, n, bot, "3ตัวโต๊ด", pay_3tod, disc_amt, net_amt, b_status))
+                        elif len(n) == 2:
+                            if top > 0:
+                                d_rate = disc_2d if disc_2d > 0 else disc_total
+                                disc_amt = top * (d_rate / 100.0)
+                                net_amt = top - disc_amt
+                                c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                                          (user, c_id, c_type, n, top, "2ตัวบน", pay_2d, disc_amt, net_amt, b_status))
+                            if bot > 0:
+                                d_rate = disc_2d if disc_2d > 0 else disc_total
+                                disc_amt = bot * (d_rate / 100.0)
+                                net_amt = bot - disc_amt
+                                c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
+                                          (user, c_id, c_type, n, bot, "2ตัวล่าง", pay_2d, disc_amt, net_amt, b_status))
+                    hold_nums = []
                 else:
-                    top = float(amt_str) if amt_str.strip() else 0.0
-                    bot = 0.0
-                
-                for n in hold_nums:
-                    if len(n) == 3:
-                        if top > 0:
-                            d_rate = disc_3d if disc_3d > 0 else disc_total
-                            disc_amt = top * (d_rate / 100.0)
-                            net_amt = top - disc_amt
-                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
-                                      (user, c_id, c_type, n, top, "3ตัวตรง", pay_3d, disc_amt, net_amt, "ปกติ"))
-                        if bot > 0:
-                            d_rate = disc_3d if disc_3d > 0 else disc_total
-                            disc_amt = bot * (d_rate / 100.0)
-                            net_amt = bot - disc_amt
-                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
-                                      (user, c_id, c_type, n, bot, "3ตัวโต๊ด", pay_3tod, disc_amt, net_amt, "ปกติ"))
-                    elif len(n) == 2:
-                        if top > 0:
-                            d_rate = disc_2d if disc_2d > 0 else disc_total
-                            disc_amt = top * (d_rate / 100.0)
-                            net_amt = top - disc_amt
-                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
-                                      (user, c_id, c_type, n, top, "2ตัวบน", pay_2d, disc_amt, net_amt, "ปกติ"))
-                        if bot > 0:
-                            d_rate = disc_2d if disc_2d > 0 else disc_total
-                            disc_amt = bot * (d_rate / 100.0)
-                            net_amt = bot - disc_amt
-                            c.execute("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
-                                      (user, c_id, c_type, n, bot, "2ตัวล่าง", pay_2d, disc_amt, net_amt, "ปกติ"))
-                hold_nums = []
-            else:
-                hold_nums.append(block.strip())
+                    hold_nums.append(block.strip())
+
         conn.commit()
         conn.close()
     except Exception as e:
         print("Add Draft Error:", e)
     return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={customer_info}", status_code=status.HTTP_303_SEE_OTHER)
 
-@app.post("/confirm-bill")
+@app.get("/delete-draft-item")
+def delete_draft_item(id: int, user: str, draw: str, selected: str):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM TempDraft WHERE id = %s", (id,))
+        conn.commit()
+        conn.close()
+    except: pass
+    return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={selected}", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.get("/clear-draft")
+def clear_draft(user: str, draw: str, selected: str):
+    parts = selected.split('|')
+    c_id, c_type = parts[0], parts[2]
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
+        conn.commit()
+        conn.close()
+    except: pass
+    return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={selected}", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.get("/edit-draft-item", response_class=HTMLResponse)
+def edit_draft_item_page(id: int, user: str, draw: str, selected: str):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("SELECT id, num, amt_teng, type FROM TempDraft WHERE id=%s", (id,))
+        item = c.fetchone()
+        conn.close()
+        if not item:
+            return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={selected}", status_code=status.HTTP_303_SEE_OTHER)
+        
+        form_html = f"""
+        <div class="container my-4" style="max-width: 500px;">
+            <div class="card shadow p-4">
+                <h4 class="text-warning mb-3 fw-bold">✏️ แก้ไขรายการร่าง</h4>
+                <form method="POST" action="/update-draft-item">
+                    <input type="hidden" name="id" value="{id}">
+                    <input type="hidden" name="user" value="{user}">
+                    <input type="hidden" name="draw" value="{draw}">
+                    <input type="hidden" name="selected" value="{selected}">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">หมายเลข:</label>
+                        <input type="text" name="num" class="form-control" value="{item[1]}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">จำนวนเงิน:</label>
+                        <input type="number" step="any" name="amount" class="form-control" value="{item[2]}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">ประเภท:</label>
+                        <input type="text" class="form-control" value="{item[3]}" readonly>
+                    </div>
+                    <button type="submit" class="btn btn-warning w-100 fw-bold py-2 mb-2">💾 บันทึกการแก้ไข</button>
+                    <a href="/buy?user={user}&draw={draw}&selected={selected}" class="btn btn-outline-secondary w-100 fw-bold">ยกเลิก</a>
+                </form>
+            </div>
+        </div>
+        """
+        return HTMLResponse(form_html)
+    except:
+        return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={selected}", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.post("/update-draft-item")
+def update_draft_item(id: int = Form(...), user: str = Form(...), draw: str = Form(...), selected: str = Form(...), num: str = Form(...), amount: float = Form(...)):
+    parts = selected.split('|')
+    c_id, c_type = parts[0], parts[2]
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        disc_total, disc_3d, disc_2d = 0.0, 0.0, 0.0
+        if c_type == 'Customer':
+            c.execute("SELECT disc_total, disc_3d, disc_2d FROM Customers WHERE id=%s", (c_id,))
+            res = c.fetchone()
+            if res:
+                disc_total, disc_3d, disc_2d = float(res[0] or 0), float(res[1] or 0), float(res[2] or 0)
+        
+        c.execute("SELECT type FROM TempDraft WHERE id=%s", (id,))
+        t_res = c.fetchone()
+        t_type = t_res[0] if t_res else "2ตัวบน"
+
+        d_rate = 0.0
+        if "3ตัว" in t_type: d_rate = disc_3d if disc_3d > 0 else disc_total
+        elif "2ตัว" in t_type: d_rate = disc_2d if disc_2d > 0 else disc_total
+
+        final_disc = amount * (d_rate / 100.0)
+        final_net = amount - final_disc
+        b_status = check_number_blocked_status(draw, num.strip())
+
+        c.execute("UPDATE TempDraft SET num=%s, amt_teng=%s, discount=%s, net=%s, status=%s WHERE id=%s", (num.strip(), amount, final_disc, final_net, b_status, id))
+        conn.commit()
+        conn.close()
+    except: pass
+    return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={selected}", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.post("/confirm-bill", response_class=HTMLResponse)
 def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: str = Form(...)):
     parts = customer_info.split('|')
     c_id, c_name, c_type = parts[0], parts[1], parts[2]
@@ -1448,6 +1736,12 @@ def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: st
 
         c.execute("SELECT num, type, amt_teng, status FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
         drafts = c.fetchall()
+        
+        bill_items = []
+        total_amt, total_disc, total_net = 0.0, 0.0, 0.0
+        bill_no = ""
+        ts = ""
+        
         if drafts:
             bill_no = f"BILL-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:21]}-{c_id}"
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1460,22 +1754,46 @@ def confirm_bill(user: str = Form(...), draw: str = Form(...), customer_info: st
                 elif t_type in ["2ตัวบน", "2ตัวล่าง"]: final_rate = pay_2d_def
 
                 d_rate = 0.0
-                if "3ตัว" in t_type:
-                    d_rate = disc_3d if disc_3d > 0 else disc_total
-                elif "2ตัว" in t_type:
-                    d_rate = disc_2d if disc_2d > 0 else disc_total
+                if "3ตัว" in t_type: d_rate = disc_3d if disc_3d > 0 else disc_total
+                elif "2ตัว" in t_type: d_rate = disc_2d if disc_2d > 0 else disc_total
 
                 final_disc = amt_val * (d_rate / 100.0)
                 final_net = amt_val - final_disc
 
                 c.execute("INSERT INTO Transactions (draw_date, timestamp, username, customer_id, customer_name, customer_type, bill_no, num, type, amount, status, discount, net, payout_rate) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", 
                           (draw, ts, user, int(c_id), c_name, c_type, bill_no, n, t_type, amt_val, status_val, final_disc, final_net, final_rate))
+                
+                amt_teng_val = amt_val if ("ตรง" in t_type or "บน" in t_type) else 0.0
+                amt_tod_val = amt_val if ("โต๊ด" in t_type or "ล่าง" in t_type) else 0.0
+                
+                bill_items.append({
+                    "num": n,
+                    "amt_teng": amt_teng_val,
+                    "amt_tod": amt_tod_val,
+                    "discount": final_disc,
+                    "net": final_net,
+                    "payout_rate": final_rate
+                })
+                total_amt += amt_val
+                total_disc += final_disc
+                total_net += final_net
+
             c.execute("DELETE FROM TempDraft WHERE username=%s AND customer_id=%s AND customer_type=%s", (user, c_id, c_type))
             conn.commit()
+        
+        c.execute("SELECT role FROM Users WHERE username=%s", (user,))
+        role_res = c.fetchone()
+        role = role_res[0] if role_res else "Member"
         conn.close()
+
+        content = Template(BILL_PRINT_TEMPLATE).render(
+            lotto_title="หวยรัฐบาล", draw_date=draw, bill_no=bill_no, timestamp=ts,
+            customer_name=c_name, username=user, role=role, bill_items=bill_items,
+            total_amt=total_amt, total_disc=total_disc, total_net=total_net
+        )
+        return Template(LAYOUT).render(username=user, role=role, draw_date=draw, content=content)
     except Exception as e:
-        print("Confirm Error:", e)
-    return RedirectResponse(url=f"/buy?user={user}&draw={draw}&selected={customer_info}&msg=บันทึกบิลสำเร็จ!", status_code=status.HTTP_303_SEE_OTHER)
+        return f"Confirm Bill Error: {str(e)}"
 
 @app.get("/audit-all", response_class=HTMLResponse)
 def audit_all_page(user: str, draw: str):
