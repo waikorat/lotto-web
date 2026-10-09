@@ -337,14 +337,7 @@ BLOCKED_TEMPLATE = """
                         <label class="form-label fw-bold text-dark">สถานะเลขอั้น:</label>
                         <select name="status" class="form-select">
                             <option value="ปิดรับ" {% if edit_blocked[3] == 'ปิดรับ' %}selected{% endif %}>ปิดรับ (ห้ามแทง)</option>
-                            <option value="จ่ายครึ่ง" {% if edit_blocked[3] == 'จ่ายครึ่ง' %}selected{% endif %}>จ่ายครึ่ง (เลขอั้นจ่าย 50%)</option>
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold text-dark">ประเภท:</label>
-                        <select name="type" class="form-select">
-                            <option value="3ตัว" {% if edit_blocked[4] == '3ตัว' %}selected{% endif %}>3 ตัว</option>
-                            <option value="2ตัว" {% if edit_blocked[4] == '2ตัว' %}selected{% endif %}>2 ตัว</option>
+                            <option value="จ่ายครึ่ง" {% if edit_blocked[3] == 'จ่ายครึ่ง' %}selected{% endif %}>จ่ายครึ่ง (เลขอั้นจ่าย 50% ทุกกลับ)</option>
                         </select>
                     </div>
                     <button type="submit" class="btn btn-warning w-100 fw-bold py-2 mb-2">💾 บันทึกการแก้ไข</button>
@@ -356,8 +349,9 @@ BLOCKED_TEMPLATE = """
                     <input type="hidden" name="user" value="{{ username }}">
                     <input type="hidden" name="draw" value="{{ draw_date }}">
                     <div class="mb-3">
-                        <label class="form-label fw-bold text-dark">ข้อมูลดิบเลขอั้น (รองรับคั่นด้วยจุลภาคหรือขึ้นบรรทัดใหม่):</label>
-                        <textarea name="raw_input" class="form-control" rows="4" placeholder="เช่น 123, 45, 789" required autofocus></textarea>
+                        <label class="form-label fw-bold text-dark">ข้อมูลดิบเลขอั้น (ระบบแยก 2 ตัว/3 ตัวและสลับตำแหน่งอัตโนมัติ):</label>
+                        <textarea name="raw_input" class="form-control" rows="5" placeholder="เช่น 123, 45, 789" required autofocus></textarea>
+                        <div class="form-text text-muted">รองรับการคั่นด้วยเครื่องหมายจุลภาค (,) หรือขึ้นบรรทัดใหม่</div>
                     </div>
                     <div class="mb-3">
                         <label class="form-label fw-bold text-dark">สถานะเลขอั้น:</label>
@@ -366,25 +360,25 @@ BLOCKED_TEMPLATE = """
                             <option value="จ่ายครึ่ง">จ่ายครึ่ง (เลขอั้นจ่าย 50% ทุกกลับ/ตัวกลับ)</option>
                         </select>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label fw-bold text-dark">ประเภท:</label>
-                        <select name="type" class="form-select">
-                            <option value="3ตัว">3 ตัว (สลับตำแหน่งอัตโนมัติ)</option>
-                            <option value="2ตัว">2 ตัว (สลับตำแหน่งอัตโนมัติ)</option>
-                        </select>
-                    </div>
-                    <button type="submit" class="btn btn-danger w-100 fw-bold py-2">💾 ประมวลผลและบันทึกเลขอั้น</button>
+                    <button type="submit" class="btn btn-danger w-100 fw-bold py-2">💾 ประมวลผลและบันทึกเลขอั้นอัตโนมัติ</button>
                 </form>
             {% endif %}
         </div>
     </div>
     <div class="col-md-7">
         <div class="card shadow p-4">
-            <h4 class="text-primary mb-3 fw-bold">📋 รายการเลขอั้นงวด: {{ draw_date }}</h4>
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4 class="text-primary mb-0 fw-bold">📋 รายการเลขอั้นงวด: {{ draw_date }}</h4>
+                {% if blocked_list %}
+                <a href="/clear-blocked?user={{ username }}&draw={{ draw_date }}" class="btn btn-outline-danger btn-sm fw-bold" onclick="return confirm('⚠️ คำเตือน: คุณต้องการล้างข้อมูลเลขอั้นทั้งหมดในงวดนี้ใช่หรือไม่?')">
+                    🗑️ ล้างข้อมูลเลขอั้นทั้งหมด
+                </a>
+                {% endif %}
+            </div>
             <div class="table-responsive">
                 <table class="table table-striped table-bordered text-center align-middle">
                     <thead class="table-dark">
-                        <tr><th>ID</th><th>ข้อมูลดิบ (Raw Num)</th><th>สถานะ</th><th>ประเภท</th><th>จัดการแบบเบ็ดเสร็จ</th></tr>
+                        <tr><th>ID</th><th>ข้อมูลดิบ / เลขอั้น</th><th>สถานะ</th><th>ประเภท</th><th>จัดการ</th></tr>
                     </thead>
                     <tbody>
                         {% for b in blocked_list %}
@@ -491,11 +485,14 @@ BUY_CONTENT = """
     <div class="col-lg-4">
         <div class="card shadow p-3 bg-white mb-4 border">
             <h5 class="text-danger fw-bold mb-3">🚫 ข้อมูลดิบเลขอั้น (งวดปัจจุบัน)</h5>
+            
             <label class="fw-bold text-dark mb-1">เลขอั้นปิดรับ:</label>
-            <textarea class="form-control mb-2 bg-light text-danger fw-bold" rows="3" readonly>{{ block_closed }}</textarea>
-            <label class="fw-bold text-dark mb-1">เลขอั้น 3 ตัว (จ่ายครึ่ง - ข้อมูลดิบ):</label>
-            <textarea class="form-control mb-2 bg-light text-dark" rows="3" readonly>{{ block_3d }}</textarea>
-            <label class="fw-bold text-dark mb-1">เลขอั้น 2 ตัว (จ่ายครึ่ง - ข้อมูลดิบ):</label>
+            <textarea class="form-control mb-3 bg-light text-danger fw-bold" rows="3" readonly>{{ block_closed }}</textarea>
+            
+            <label class="fw-bold text-dark mb-1">เลขอั้น 3ตัว ตรง-โต๊ด ทุกกลับ(จ่ายครึ่ง):</label>
+            <textarea class="form-control mb-3 bg-light text-dark" rows="3" readonly>{{ block_3d }}</textarea>
+            
+            <label class="fw-bold text-dark mb-1">เลขอั้น 2ตัว บน-ล่าง และตัวกลับ(จ่ายครึ่ง):</label>
             <textarea class="form-control bg-light text-dark" rows="3" readonly>{{ block_2d }}</textarea>
         </div>
     </div>
@@ -1060,11 +1057,9 @@ def get_blocked_display_data(draw_date):
     try:
         conn = connect_db()
         c = conn.cursor()
-        # ดึงเฉพาะรายการที่ถูกบันทึกเป็นข้อมูลดิบแท้จริง (is_raw = TRUE) เพื่อไม่ให้เลขสลับตำแหน่งมารบกวน
         c.execute("SELECT raw_num, status, type FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s) AND is_raw = TRUE", (draw_date, f"%{draw_date}%"))
         rows = c.fetchall()
         
-        # Fallback กรณีฐานข้อมูลเก่ายังไม่มี flag is_raw ให้ดึงแบบจำกัดเฉพาะความยาวตัวเลขตรงๆ
         if not rows:
             c.execute("SELECT raw_num, status, type FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw_date, f"%{draw_date}%"))
             rows = c.fetchall()
@@ -1075,20 +1070,27 @@ def get_blocked_display_data(draw_date):
         l_3 = []
         l_2 = []
         
-        seen = set()
+        seen_c = set()
+        seen_3 = set()
+        seen_2 = set()
+        
         for r_num, status_val, type_val in rows:
             if not r_num: continue
-            key = f"{r_num}-{status_val}-{type_val}"
-            if key in seen: continue
-            seen.add(key)
+            num_str = str(r_num).strip()
             
             if status_val == "ปิดรับ":
-                l_c.append(str(r_num))
+                if num_str not in seen_c:
+                    seen_c.add(num_str)
+                    l_c.append(num_str)
             else:
-                if type_val == "3ตัว" or len(str(r_num)) == 3:
-                    l_3.append(str(r_num))
-                elif type_val == "2ตัว" or len(str(r_num)) == 2:
-                    l_2.append(str(r_num))
+                if len(num_str) == 3 or type_val == "3ตัว":
+                    if num_str not in seen_3:
+                        seen_3.add(num_str)
+                        l_3.append(num_str)
+                elif len(num_str) == 2 or type_val == "2ตัว":
+                    if num_str not in seen_2:
+                        seen_2.add(num_str)
+                        l_2.append(num_str)
                     
         return ", ".join(l_c), ", ".join(l_3), ", ".join(l_2)
     except Exception as e:
@@ -1171,8 +1173,7 @@ def blocked_numbers_page(user: str, draw: str, msg: str = None, error: str = Non
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
         role = c.fetchone()[0]
 
-        # แสดงรายการทั้งหมดในตารางจัดการเลขอั้นตามปกติ
-        c.execute("SELECT id, draw_date, raw_num, status, type FROM BlockedNumbers WHERE draw_date = %s OR draw_date ILIKE %s ORDER BY id DESC", (draw, f"%{draw}%"))
+        c.execute("SELECT id, draw_date, raw_num, status, type FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s) AND is_raw = TRUE ORDER BY id DESC", (draw, f"%{draw}%"))
         blocked_list = c.fetchall()
 
         edit_blocked = None
@@ -1188,7 +1189,7 @@ def blocked_numbers_page(user: str, draw: str, msg: str = None, error: str = Non
         return f"Error: {str(e)}"
 
 @app.post("/save-blocked")
-def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = Form(...), status: str = Form(...), type: str = Form(...)):
+def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = Form(...), status: str = Form(...)):
     try:
         conn = connect_db()
         c = conn.cursor()
@@ -1197,17 +1198,19 @@ def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = 
         raw_numbers = [item.strip() for item in cleaned.split(',') if item.strip()]
         
         for num_str in raw_numbers:
-            # 1. บันทึกข้อมูลดิบแท้จริง (is_raw = TRUE) สำหรับนำไปแสดงผลที่หน้าบันทึกโพย
+            length = len(num_str)
+            t_val = "3ตัว" if length == 3 else ("2ตัว" if length == 2 else "อื่นๆ")
+            
+            # 1. บันทึกข้อมูลดิบแท้จริง (is_raw = TRUE)
             c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type, is_raw) VALUES (%s, %s, %s, %s, TRUE)", 
-                      (draw.strip(), num_str, status, type))
+                      (draw.strip(), num_str, status, t_val))
 
-            # 2. หากไม่ใช่สถานะปิดรับ ให้แตกสลับตำแหน่งสำหรับคำนวณผลรางวัล/ตัดเรต (is_raw = FALSE)
-            if status != "ปิดรับ":
-                perms = set("".join(p) for p in itertools.permutations(num_str))
-                for p_num in perms:
-                    if p_num != num_str:
-                        c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type, is_raw) VALUES (%s, %s, %s, %s, FALSE)", 
-                                  (draw.strip(), p_num, status, type))
+            # 2. ทำการสลับตำแหน่ง (Permutations) อัตโนมัติทุกกรณี
+            perms = set("".join(p) for p in itertools.permutations(num_str))
+            for p_num in perms:
+                if p_num != num_str:
+                    c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type, is_raw) VALUES (%s, %s, %s, %s, FALSE)", 
+                              (draw.strip(), p_num, status, t_val))
                               
         conn.commit()
         conn.close()
@@ -1215,14 +1218,17 @@ def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = 
         print("Save Blocked Error:", e)
         return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&error=เกิดข้อผิดพลาด: {str(e)}", status_code=status.HTTP_303_SEE_OTHER)
         
-    return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&msg=ประมวลผลและบันทึกเลขอั้นสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&msg=ประมวลผลและบันทึกเลขอั้นอัตโนมัติสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.post("/update-blocked")
-def update_blocked(user: str = Form(...), draw: str = Form(...), blocked_id: int = Form(...), raw_num: str = Form(...), status: str = Form(...), type: str = Form(...)):
+def update_blocked(user: str = Form(...), draw: str = Form(...), blocked_id: int = Form(...), raw_num: str = Form(...), status: str = Form(...)):
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("UPDATE BlockedNumbers SET raw_num=%s, status=%s, type=%s, is_raw=TRUE WHERE id=%s", (raw_num.strip(), status, type, blocked_id))
+        length = len(raw_num.strip())
+        t_val = "3ตัว" if length == 3 else ("2ตัว" if length == 2 else "อื่นๆ")
+        
+        c.execute("UPDATE BlockedNumbers SET raw_num=%s, status=%s, type=%s, is_raw=TRUE WHERE id=%s", (raw_num.strip(), status, t_val, blocked_id))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -1239,6 +1245,19 @@ def delete_blocked(id: int, user: str, draw: str):
         conn.close()
     except: pass
     return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&msg=ลบเลขอั้นสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
+
+@app.get("/clear-blocked")
+def clear_blocked(user: str, draw: str):
+    try:
+        conn = connect_db()
+        c = conn.cursor()
+        c.execute("DELETE FROM BlockedNumbers WHERE draw_date = %s OR draw_date ILIKE %s", (draw, f"%{draw}%"))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("Clear Blocked Error:", e)
+        return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&error=เกิดข้อผิดพลาดในการล้างข้อมูลเลขอั้น: {str(e)}", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=f"/blocked-numbers?user={user}&draw={draw}&msg=ล้างข้อมูลเลขอั้นทั้งหมดประจำงวดสำเร็จ", status_code=status.HTTP_303_SEE_OTHER)
 
 @app.get("/buy", response_class=HTMLResponse)
 def buy_page(user: str, draw: str, selected: str = None, msg: str = None):
