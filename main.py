@@ -375,25 +375,32 @@ BLOCKED_TEMPLATE = """
                 </a>
                 {% endif %}
             </div>
-            <div class="table-responsive">
-                <table class="table table-striped table-bordered text-center align-middle">
-                    <thead class="table-dark">
-                        <tr><th>ID</th><th>ข้อมูลดิบ / เลขอั้น</th><th>สถานะ</th><th>ประเภท</th><th>จัดการ</th></tr>
+            <div class="table-responsive" style="max-height: 500px; overflow-y: auto;">
+                <table class="table table-striped table-bordered text-center align-middle" style="font-size: 0.9rem;">
+                    <thead class="table-dark sticky-top">
+                        <tr><th>ID</th><th>หมายเลขเลขอั้น</th><th>สถานะ</th><th>ประเภท</th><th>ที่มา</th><th>จัดการ</th></tr>
                     </thead>
                     <tbody>
                         {% for b in blocked_list %}
                         <tr>
                             <td>{{ b[0] }}</td>
-                            <td><b class="text-danger fs-5">{{ b[2] }}</b></td>
+                            <td><b class="text-danger fs-6">{{ b[2] }}</b></td>
                             <td><span class="badge {% if b[3] == 'ปิดรับ' %}bg-danger{% else %}bg-warning text-dark{% endif %}">{{ b[3] }}</span></td>
                             <td>{{ b[4] }}</td>
                             <td>
-                                <a href="/blocked-numbers?user={{ username }}&draw={{ draw_date }}&edit_id={{ b[0] }}" class="btn btn-warning btn-sm fw-bold">✏️ แก้ไข</a>
-                                <a href="/delete-blocked?id={{ b[0] }}&user={{ username }}&draw={{ draw_date }}" class="btn btn-outline-danger btn-sm fw-bold" onclick="return confirm('ยืนยันการลบเลขอั้นนี้?')">🗑️ ลบ</a>
+                                {% if b[5] %}
+                                    <span class="badge bg-primary">ข้อมูลดิบ</span>
+                                {% else %}
+                                    <span class="badge bg-secondary">ตัวกลับ</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <a href="/blocked-numbers?user={{ username }}&draw={{ draw_date }}&edit_id={{ b[0] }}" class="btn btn-warning btn-sm py-0 px-1 fw-bold">✏️</a>
+                                <a href="/delete-blocked?id={{ b[0] }}&user={{ username }}&draw={{ draw_date }}" class="btn btn-outline-danger btn-sm py-0 px-1 fw-bold" onclick="return confirm('ยืนยันการลบเลขอั้นนี้?')">🗑️</a>
                             </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="5" class="text-muted py-3">ยังไม่มีเลขอั้นในงวดนี้</td></tr>
+                        <tr><td colspan="6" class="text-muted py-3">ยังไม่มีเลขอั้นในงวดนี้</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -1173,7 +1180,7 @@ def blocked_numbers_page(user: str, draw: str, msg: str = None, error: str = Non
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
         role = c.fetchone()[0]
 
-        c.execute("SELECT id, draw_date, raw_num, status, type FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s) AND is_raw = TRUE ORDER BY id DESC", (draw, f"%{draw}%"))
+        c.execute("SELECT id, draw_date, raw_num, status, type, is_raw FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s) ORDER BY id DESC", (draw, f"%{draw}%"))
         blocked_list = c.fetchall()
 
         edit_blocked = None
@@ -1201,11 +1208,9 @@ def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = 
             length = len(num_str)
             t_val = "3ตัว" if length == 3 else ("2ตัว" if length == 2 else "อื่นๆ")
             
-            # 1. บันทึกข้อมูลดิบแท้จริง (is_raw = TRUE)
             c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type, is_raw) VALUES (%s, %s, %s, %s, TRUE)", 
                       (draw.strip(), num_str, status, t_val))
 
-            # 2. ทำการสลับตำแหน่ง (Permutations) อัตโนมัติทุกกรณี
             perms = set("".join(p) for p in itertools.permutations(num_str))
             for p_num in perms:
                 if p_num != num_str:
