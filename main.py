@@ -68,6 +68,7 @@ def startup_db():
         conn.commit()
 
         migrations = [
+            "ALTER TABLE BlockedNumbers ADD COLUMN IF NOT EXISTS is_raw BOOLEAN DEFAULT FALSE;",
             "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ปกติ';",
             "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS amt_teng NUMERIC DEFAULT 0;",
             "ALTER TABLE TempDraft ADD COLUMN IF NOT EXISTS amt_tod NUMERIC DEFAULT 0;",
@@ -492,9 +493,9 @@ BUY_CONTENT = """
             <h5 class="text-danger fw-bold mb-3">🚫 ข้อมูลดิบเลขอั้น (งวดปัจจุบัน)</h5>
             <label class="fw-bold text-dark mb-1">เลขอั้นปิดรับ:</label>
             <textarea class="form-control mb-2 bg-light text-danger fw-bold" rows="3" readonly>{{ block_closed }}</textarea>
-            <label class="fw-bold text-dark mb-1">เลขอั้น 3 ตัว (จ่ายครึ่ง):</label>
+            <label class="fw-bold text-dark mb-1">เลขอั้น 3 ตัว (จ่ายครึ่ง - ข้อมูลดิบ):</label>
             <textarea class="form-control mb-2 bg-light text-dark" rows="3" readonly>{{ block_3d }}</textarea>
-            <label class="fw-bold text-dark mb-1">เลขอั้น 2 ตัว (จ่ายครึ่ง):</label>
+            <label class="fw-bold text-dark mb-1">เลขอั้น 2 ตัว (จ่ายครึ่ง - ข้อมูลดิบ):</label>
             <textarea class="form-control bg-light text-dark" rows="3" readonly>{{ block_2d }}</textarea>
         </div>
     </div>
@@ -1059,22 +1060,27 @@ def get_blocked_display_data(draw_date):
     try:
         conn = connect_db()
         c = conn.cursor()
-        # ดึงเฉพาะรายการเลขอั้นที่เป็นข้อมูลดิบตรงๆ ตามงวด (ไม่เอาเลขสลับตำแหน่งเบื้องหลังมาปะปน)
-        c.execute("SELECT raw_num, status, type FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw_date, f"%{draw_date}%"))
+        # ดึงเฉพาะรายการที่ถูกบันทึกเป็นข้อมูลดิบแท้จริง (is_raw = TRUE) เพื่อไม่ให้เลขสลับตำแหน่งมารบกวน
+        c.execute("SELECT raw_num, status, type FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s) AND is_raw = TRUE", (draw_date, f"%{draw_date}%"))
         rows = c.fetchall()
+        
+        # Fallback กรณีฐานข้อมูลเก่ายังไม่มี flag is_raw ให้ดึงแบบจำกัดเฉพาะความยาวตัวเลขตรงๆ
+        if not rows:
+            c.execute("SELECT raw_num, status, type FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw_date, f"%{draw_date}%"))
+            rows = c.fetchall()
+
         conn.close()
         
         l_c = []
         l_3 = []
         l_2 = []
         
-        seen_raw = set()
+        seen = set()
         for r_num, status_val, type_val in rows:
             if not r_num: continue
-            # ป้องกันข้อมูลซ้ำซ้อนในช่องแสดงผลดิบ
-            identifier = f"{r_num}-{status_val}-{type_val}"
-            if identifier in seen_raw: continue
-            seen_raw.add(identifier)
+            key = f"{r_num}-{status_val}-{type_val}"
+            if key in seen: continue
+            seen.add(key)
             
             if status_val == "ปิดรับ":
                 l_c.append(str(r_num))
@@ -1165,6 +1171,7 @@ def blocked_numbers_page(user: str, draw: str, msg: str = None, error: str = Non
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
         role = c.fetchone()[0]
 
+        # แสดงรายการทั้งหมดในตารางจัดการเลขอั้นตามปกติ
         c.execute("SELECT id, draw_date, raw_num, status, type FROM BlockedNumbers WHERE draw_date = %s OR draw_date ILIKE %s ORDER BY id DESC", (draw, f"%{draw}%"))
         blocked_list = c.fetchall()
 
@@ -1190,14 +1197,17 @@ def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = 
         raw_numbers = [item.strip() for item in cleaned.split(',') if item.strip()]
         
         for num_str in raw_numbers:
-            if status == "ปิดรับ":
-                c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type) VALUES (%s, %s, %s, %s)", 
-                          (draw.strip(), num_str, status, type))
-            else:
+            # 1. บันทึกข้อมูลดิบแท้จริง (is_raw = TRUE) สำหรับนำไปแสดงผลที่หน้าบันทึกโพย
+            c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type, is_raw) VALUES (%s, %s, %s, %s, TRUE)", 
+                      (draw.strip(), num_str, status, type))
+
+            # 2. หากไม่ใช่สถานะปิดรับ ให้แตกสลับตำแหน่งสำหรับคำนวณผลรางวัล/ตัดเรต (is_raw = FALSE)
+            if status != "ปิดรับ":
                 perms = set("".join(p) for p in itertools.permutations(num_str))
                 for p_num in perms:
-                    c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type) VALUES (%s, %s, %s, %s)", 
-                              (draw.strip(), p_num, status, type))
+                    if p_num != num_str:
+                        c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type, is_raw) VALUES (%s, %s, %s, %s, FALSE)", 
+                                  (draw.strip(), p_num, status, type))
                               
         conn.commit()
         conn.close()
@@ -1212,7 +1222,7 @@ def update_blocked(user: str = Form(...), draw: str = Form(...), blocked_id: int
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("UPDATE BlockedNumbers SET raw_num=%s, status=%s, type=%s WHERE id=%s", (raw_num.strip(), status, type, blocked_id))
+        c.execute("UPDATE BlockedNumbers SET raw_num=%s, status=%s, type=%s, is_raw=TRUE WHERE id=%s", (raw_num.strip(), status, type, blocked_id))
         conn.commit()
         conn.close()
     except Exception as e:
