@@ -492,10 +492,10 @@ BUY_CONTENT = """
             <h5 class="text-danger fw-bold mb-3">🚫 ข้อมูลดิบเลขอั้น (งวดปัจจุบัน)</h5>
             <label class="fw-bold text-dark mb-1">เลขอั้นปิดรับ:</label>
             <textarea class="form-control mb-2 bg-light text-danger fw-bold" rows="3" readonly>{{ block_closed }}</textarea>
-            <label class="fw-bold text-dark mb-1">เลขอั้น 3 ตัว ตรง-โต๊ด ทุกกลับ (จ่ายครึ่ง):</label>
-            <textarea class="form-control mb-2 bg-light text-dark" rows="4" readonly>{{ block_3d }}</textarea>
-            <label class="fw-bold text-dark mb-1">เลขอั้น 2 ตัวบน-ล่าง และตัวกลับ (จ่ายครึ่ง):</label>
-            <textarea class="form-control bg-light text-dark" rows="4" readonly>{{ block_2d }}</textarea>
+            <label class="fw-bold text-dark mb-1">เลขอั้น 3 ตัว (จ่ายครึ่ง):</label>
+            <textarea class="form-control mb-2 bg-light text-dark" rows="3" readonly>{{ block_3d }}</textarea>
+            <label class="fw-bold text-dark mb-1">เลขอั้น 2 ตัว (จ่ายครึ่ง):</label>
+            <textarea class="form-control bg-light text-dark" rows="3" readonly>{{ block_2d }}</textarea>
         </div>
     </div>
 </div>
@@ -1059,14 +1059,34 @@ def get_blocked_display_data(draw_date):
     try:
         conn = connect_db()
         c = conn.cursor()
-        c.execute("SELECT DISTINCT raw_num, status, type FROM BlockedNumbers WHERE draw_date = %s OR draw_date ILIKE %s", (draw_date, f"%{draw_date}%"))
+        # ดึงเฉพาะรายการเลขอั้นที่เป็นข้อมูลดิบตรงๆ ตามงวด (ไม่เอาเลขสลับตำแหน่งเบื้องหลังมาปะปน)
+        c.execute("SELECT raw_num, status, type FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s)", (draw_date, f"%{draw_date}%"))
         rows = c.fetchall()
         conn.close()
-        l_c = [r[0] for r in rows if r[1]=="ปิดรับ"]
-        l_3 = [r[0] for r in rows if r[1]!="ปิดรับ" and (r[2]=="3ตัว" or len(r[0])==3)]
-        l_2 = [r[0] for r in rows if r[1]!="ปิดรับ" and (r[2]=="2ตัว" or len(r[0])==2)]
+        
+        l_c = []
+        l_3 = []
+        l_2 = []
+        
+        seen_raw = set()
+        for r_num, status_val, type_val in rows:
+            if not r_num: continue
+            # ป้องกันข้อมูลซ้ำซ้อนในช่องแสดงผลดิบ
+            identifier = f"{r_num}-{status_val}-{type_val}"
+            if identifier in seen_raw: continue
+            seen_raw.add(identifier)
+            
+            if status_val == "ปิดรับ":
+                l_c.append(str(r_num))
+            else:
+                if type_val == "3ตัว" or len(str(r_num)) == 3:
+                    l_3.append(str(r_num))
+                elif type_val == "2ตัว" or len(str(r_num)) == 2:
+                    l_2.append(str(r_num))
+                    
         return ", ".join(l_c), ", ".join(l_3), ", ".join(l_2)
-    except:
+    except Exception as e:
+        print("Get Blocked Display Error:", e)
         return "", "", ""
 
 # ================= Routes =================
