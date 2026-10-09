@@ -1208,9 +1208,11 @@ def save_blocked(user: str = Form(...), draw: str = Form(...), raw_input: str = 
             length = len(num_str)
             t_val = "3ตัว" if length == 3 else ("2ตัว" if length == 2 else "อื่นๆ")
             
+            # บันทึกข้อมูลดิบแท้จริง (is_raw = TRUE)
             c.execute("INSERT INTO BlockedNumbers (draw_date, raw_num, status, type, is_raw) VALUES (%s, %s, %s, %s, TRUE)", 
                       (draw.strip(), num_str, status, t_val))
 
+            # ทำการสลับตำแหน่ง (Permutations) อัตโนมัติทุกกรณี
             perms = set("".join(p) for p in itertools.permutations(num_str))
             for p_num in perms:
                 if p_num != num_str:
