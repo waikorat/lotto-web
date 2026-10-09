@@ -216,7 +216,9 @@ LAYOUT = """
             <a href="/campaigns?user={{ username }}" class="sidebar-menu-item">▶ หวยรัฐบาล</a>
             <a href="/campaigns?user={{ username }}" class="sidebar-menu-item">▶ หวยลาว</a>
             <a href="/campaigns?user={{ username }}" class="sidebar-menu-item">▶ หวยหุ้น</a>
+            {% if role == 'Admin' %}
             <a href="/blocked-numbers?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item text-warning fw-bold">🚫 จัดการเลขอั้น</a>
+            {% endif %}
 
             <div class="sidebar-section-title">รายงานและเครื่องมือ</div>
             <a href="/results?user={{ username }}&draw={{ draw_date }}" class="sidebar-menu-item">▶ ชนะ แพ้ (รายละเอียด)</a>
@@ -1178,6 +1180,10 @@ def blocked_numbers_page(user: str, draw: str, msg: str = None, error: str = Non
         c = conn.cursor()
         c.execute("SELECT role FROM Users WHERE username=%s", (user,))
         role = c.fetchone()[0]
+
+        if role != 'Admin':
+            conn.close()
+            return RedirectResponse(url=f"/buy?user={user}&draw={draw}", status_code=status.HTTP_303_SEE_OTHER)
 
         c.execute("SELECT id, draw_date, raw_num, status, type, is_raw FROM BlockedNumbers WHERE (draw_date = %s OR draw_date ILIKE %s) ORDER BY id DESC", (draw, f"%{draw}%"))
         blocked_list = c.fetchall()
