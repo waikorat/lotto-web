@@ -620,6 +620,17 @@ def get_blocked_map(c, lotto_name, draw_date):
     return out
 
 
+def get_blocked_map_for(c, seller, lotto_name, draw_date):
+    """เลขอั้นของระบบ + เลขอั้นเฉพาะของเจ้ามือรายย่อย (ถ้าผู้ขายคือเจ้ามือ)  'ปิดรับ' ชนะ 'จ่ายครึ่ง'"""
+    out = get_blocked_map(c, lotto_name, draw_date)
+    if seller:
+        c.execute("SELECT num, status FROM DealerBlocked WHERE dealer=%s AND lotto_name=%s AND draw_date=%s", (seller, lotto_name, draw_date))
+        for n, st in c.fetchall():
+            if out.get(n) != "ปิดรับ":
+                out[n] = st
+    return out
+
+
 def get_blocked_display(c, lotto_name, draw_date):
     """คืน (ปิดรับ, 3ตัวจ่ายครึ่ง, 2ตัวจ่ายครึ่ง) เป็นข้อความคั่นด้วยคอมม่า"""
     base = ("SELECT raw_num, status, type FROM BlockedNumbers "
@@ -725,7 +736,7 @@ def generate_bill_no(c, lotto_name, draw_date, t_type, t_id):
 
 # ============================================================ ยอดขายเรียลไทม์ (แอดมิน) + เจาะลึกตามสายงาน
 
-BUILD = "2026-11-28.1"      # หมายเลขรุ่นของ common.py (แสดงในหน้ายอดขายสดและ log ตอนสตาร์ต)
+BUILD = "2026-11-28.5"      # หมายเลขรุ่นของ common.py (แสดงในหน้ายอดขายสดและ log ตอนสตาร์ต)
 
 _SALES_COLS = "COALESCE(SUM(amount),0), COALESCE(SUM(discount),0), COALESCE(SUM(net),0), COUNT(DISTINCT bill_no), COUNT(*)"
 
@@ -1001,6 +1012,16 @@ MIGRATIONS = [
     "amount NUMERIC(14,2), scope TEXT, lotto_name TEXT, draw_date TEXT, note TEXT, credit_added NUMERIC(14,2) DEFAULT 0, "
     "by_user TEXT, created_at TEXT, voided BOOLEAN DEFAULT FALSE)",
     "CREATE INDEX IF NOT EXISTS idx_payments_seller ON Payments (seller)",
+    "ALTER TABLE Users ADD COLUMN IF NOT EXISTS dealer_enabled BOOLEAN DEFAULT FALSE",
+    "CREATE TABLE IF NOT EXISTS DealerPlans (id SERIAL PRIMARY KEY, dealer TEXT, lotto_name TEXT, draw_date TEXT, plan TEXT, updated_at TEXT)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_dealerplans ON DealerPlans (dealer, lotto_name, draw_date)",
+    "CREATE TABLE IF NOT EXISTS DealerForwards (id SERIAL PRIMARY KEY, dealer TEXT, bill_no TEXT, lotto_name TEXT, draw_date TEXT, "
+    "total_amount NUMERIC(14,2), total_net NUMERIC(14,2), by_user TEXT, created_at TEXT)",
+    "CREATE INDEX IF NOT EXISTS ix_dealerforwards_dealer ON DealerForwards (dealer)",
+    "CREATE TABLE IF NOT EXISTS DealerBlocked (id SERIAL PRIMARY KEY, dealer TEXT, lotto_name TEXT, draw_date TEXT, num TEXT, status TEXT, UNIQUE (dealer, lotto_name, draw_date, num))",
+    "CREATE TABLE IF NOT EXISTS DealerNumCaps (id SERIAL PRIMARY KEY, dealer TEXT, lotto_name TEXT, draw_date TEXT, num TEXT, cap NUMERIC, UNIQUE (dealer, lotto_name, draw_date, num))",
+    "CREATE TABLE IF NOT EXISTS UserMailSettings (username TEXT PRIMARY KEY, host TEXT, port INTEGER, security TEXT, smtp_user TEXT, pw_enc TEXT, "
+    "from_name TEXT, from_email TEXT, updated_at TEXT)",
     "CREATE TABLE IF NOT EXISTS CreditLedger (id SERIAL PRIMARY KEY, target_type TEXT, target_id INTEGER, delta NUMERIC(14,2), "
     "kind TEXT, bill_no TEXT, note TEXT, by_user TEXT, created_at TEXT)",
     "CREATE INDEX IF NOT EXISTS ix_creditledger_target ON CreditLedger (target_type, target_id)",
@@ -2290,7 +2311,7 @@ def handle_chat_message(c, owner, channel, ext_id, text):
     rates, _ = get_rates(c, str(cust_id), camp["lotto_name"])
     if not rates:
         return "ยังไม่ได้ตั้งเรตของคุณสำหรับหวยนี้ กรุณาติดต่อผู้ขาย"
-    blocked = get_blocked_map(c, camp["lotto_name"], camp["draw_date"])
+    blocked = get_blocked_map_for(c, owner, camp["lotto_name"], camp["draw_date"])
     rows, rejected, invalid = make_draft_rows(rates, blocked, entries, owner, "Customer", cust_id, camp)
     if rows:
         c.executemany("INSERT INTO TempDraft (username, customer_id, customer_type, num, amt_teng, type, payout_rate, discount, net, "
@@ -2968,3 +2989,1025 @@ def backup_download(c, me, fmt, tables):
     if fmt == "json":
         return export_json(c, tables), f"lotto-backup-{stamp}.json", "application/json"
     return export_xlsx(c, tables), f"lotto-backup-{stamp}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+# ============================================================ ระบบเจ้ามือรายย่อย (ตั้งเพดานรับ / วิเคราะห์กำไร-ขาดทุน / ตัดส่งเจ้า)
+# หลักการ (แบบ ก): โพยของลูกค้าเจ้ามือเข้าบัญชีเจ้ามือตามปกติ (Transactions username=เจ้ามือ)
+# ส่วนที่เกินเพดาน "ตีออก" = สร้างบิลซื้อของเจ้ามือกับ upline/บริษัท (Transactions customer_type='User') บันทึกไว้ใน DealerForwards
+# เจ้ามือได้ผลตอบแทนเป็นส่วนลดตามเรตที่ upline ตั้งให้  กำไร/ขาดทุนระหว่างกันเห็นได้ในเมนูบัญชีตามปกติ
+
+import itertools
+
+_D_TYPES = ("3ตัวตรง", "3ตัวโต๊ด", "2ตัวบน", "2ตัวล่าง", "วิ่งบน", "วิ่งล่าง")
+_D_RATE_KEY = {"3ตัวตรง": "pay_3d", "3ตัวโต๊ด": "pay_3tod", "2ตัวบน": "pay_2d", "2ตัวล่าง": "pay_2d", "วิ่งบน": "pay_run_top", "วิ่งล่าง": "pay_run_bot"}
+_D_KIND = {"3ตัวตรง": "3d", "3ตัวโต๊ด": "3d", "2ตัวบน": "2d", "2ตัวล่าง": "2d", "วิ่งบน": "run", "วิ่งล่าง": "run"}
+
+
+def is_dealer(c, user_id):
+    c.execute("SELECT COALESCE(dealer_enabled, FALSE) FROM Users WHERE id=%s", (user_id,))
+    r = c.fetchone()
+    return bool(r and r[0])
+
+
+def dealer_upline(c, dealer):
+    """ผู้ขายฝั่งบริษัทที่เจ้ามือซื้อด้วย = upline โดยตรง ถ้าไม่มีใช้แอดมินคนแรก"""
+    if dealer.get("parent_user"):
+        u = get_user(c, dealer["parent_user"])
+        if u:
+            return u
+    c.execute("SELECT username FROM Users WHERE LOWER(role)='admin' ORDER BY id LIMIT 1")
+    r = c.fetchone()
+    return get_user(c, r[0]) if r else None
+
+
+def _d_campaign(c, q_c):
+    opts = risk_options(c)
+    f = q_c if (q_c or "").startswith("c:") else (opts[0]["value"] if opts else "")
+    camp = get_campaign(c, int(f[2:])) if f.startswith("c:") and f[2:].isdigit() else None
+    return camp, f, opts
+
+
+def _d_default_plan():
+    return {"keep": 100.0, "budget": None, "caps": {}, "over": {}}
+
+
+def dealer_plan_load(c, dealer, camp):
+    c.execute("SELECT plan FROM DealerPlans WHERE dealer=%s AND lotto_name=%s AND draw_date=%s", (dealer["username"], camp["lotto_name"], camp["draw_date"]))
+    r = c.fetchone()
+    p = _d_default_plan()
+    if r and r[0]:
+        try:
+            p.update(json.loads(r[0]))
+        except ValueError:
+            pass
+    return p
+
+
+def dealer_plan_save(c, dealer, camp, plan):
+    js = json.dumps(plan, ensure_ascii=False)
+    now = get_thai_time().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute("UPDATE DealerPlans SET plan=%s, updated_at=%s WHERE dealer=%s AND lotto_name=%s AND draw_date=%s",
+              (js, now, dealer["username"], camp["lotto_name"], camp["draw_date"]))
+    if not c.rowcount:
+        c.execute("INSERT INTO DealerPlans (dealer, lotto_name, draw_date, plan, updated_at) VALUES (%s,%s,%s,%s,%s)",
+                  (dealer["username"], camp["lotto_name"], camp["draw_date"], js, now))
+
+
+def dealer_state(c, dealer, camp, f):
+    """ยอดขายของลูกค้าเจ้ามือ (sold) + ยอดที่ตีออกไปแล้ว (fwd) แยกตาม (เลข, ประเภท)"""
+    where, wargs = _sales_filter(c, f)
+    c.execute("SELECT num, type, COALESCE(SUM(amount),0), COALESCE(SUM(amount*payout_rate),0), COALESCE(SUM(net),0) FROM Transactions "
+              "WHERE username=%s AND COALESCE(customer_type,'Customer')='Customer'" + where + " GROUP BY num, type", (dealer["username"], *wargs))
+    sold = {(str(n).strip(), str(t).strip()): {"amt": float(a), "pay": float(p), "net": float(nt)} for n, t, a, p, nt in c.fetchall()}
+    c.execute("SELECT num, type, COALESCE(SUM(amount),0), COALESCE(SUM(amount*payout_rate),0), COALESCE(SUM(net),0) FROM Transactions "
+              "WHERE bill_no IN (SELECT bill_no FROM DealerForwards WHERE dealer=%s)" + where + " GROUP BY num, type", (dealer["username"], *wargs))
+    fwd = {(str(n).strip(), str(t).strip()): {"amt": float(a), "pay": float(p), "net": float(nt)} for n, t, a, p, nt in c.fetchall()}
+    rates, _src = get_rates(c, f"user_{dealer['id']}", camp["lotto_name"])
+    rates = rates or dict(RATE_DEFAULTS)
+    bm = get_blocked_map_for(c, dealer["username"], camp["lotto_name"], camp["draw_date"])
+    return {"sold": sold, "fwd": fwd, "rates": rates, "half": {n for n, s in bm.items() if s == "จ่ายครึ่ง"},
+            "closed": {n for n, s in bm.items() if s == "ปิดรับ"}}
+
+
+def dealer_compute(st, plan):
+    """คำนวณต่อรายการ: เก็บเอง / ตีออก / ยอดจ่ายถ้าถูกสุทธิ  แล้วสรุปกำไร-ขาดทุนต่อเลขบน/ล่าง"""
+    keep = max(0.0, min(100.0, float(plan.get("keep") or 100))) / 100.0
+    rates, half, closed = st["rates"], st["half"], st["closed"]
+    items = {}
+    for key in set(st["sold"]) | set(st["fwd"]):
+        n, t = key
+        S = st["sold"].get(key, {}).get("amt", 0.0)
+        cust_pay = st["sold"].get(key, {}).get("pay", 0.0)
+        net = st["sold"].get(key, {}).get("net", 0.0)
+        F0 = st["fwd"].get(key, {}).get("amt", 0.0)
+        fp0 = st["fwd"].get(key, {}).get("pay", 0.0)
+        fn0 = st["fwd"].get(key, {}).get("net", 0.0)
+        cap = plan.get("over", {}).get(f"{n}|{t}", plan.get("caps", {}).get(t))
+        kept_t = S * keep if cap in (None, "") else min(S * keep, float(cap))
+        is_closed = n in closed
+        send = 0.0 if is_closed else max(0.0, round(S - kept_t - F0, 2))
+        rco = rates[_D_RATE_KEY[t]]
+        hf = 0.5 if n in half else 1.0
+        fwd_amt = F0 + send
+        fwd_pay = (fp0 + send * rco) * hf
+        fwd_net = fn0 + send * (1 - disc_pct(rates, _D_KIND[t]) / 100.0)
+        items[key] = {"num": n, "type": t, "amt": S, "net": net, "kept": max(S - fwd_amt, 0.0), "fwd": fwd_amt, "send": send,
+                      "cust_pay": cust_pay * hf, "fwd_pay": fwd_pay, "exp": cust_pay * hf - fwd_pay, "fwd_net": fwd_net, "closed": is_closed}
+    net_cust = sum(v["net"] for v in items.values())
+    fwd_net = sum(v["fwd_net"] for v in items.values())
+    base = net_cust - fwd_net
+
+    def mp(field):
+        m = {t: {} for t in _D_TYPES}
+        for (n, t), v in items.items():
+            m[t][n] = m[t].get(n, 0.0) + v[field]
+        return m
+    M = {k: mp(k) for k in ("amt", "kept", "fwd", "exp")}
+    tod_tot = {fld: {} for fld in M}
+    for fld in M:
+        for n, v in M[fld]["3ตัวโต๊ด"].items():
+            k = "".join(sorted(n))
+            tod_tot[fld][k] = tod_tot[fld].get(k, 0.0) + v
+
+    def top_sum(fld, r):
+        m = M[fld]
+        k = "".join(sorted(r))
+        return (m["3ตัวตรง"].get(r, 0.0) + tod_tot[fld].get(k, 0.0) - m["3ตัวโต๊ด"].get(r, 0.0) + m["2ตัวบน"].get(r[-2:], 0.0)
+                + sum(m["วิ่งบน"].get(d, 0.0) for d in set(r)))
+
+    def bot_sum(fld, r):
+        m = M[fld]
+        return m["2ตัวล่าง"].get(r, 0.0) + sum(m["วิ่งล่าง"].get(d, 0.0) for d in set(r))
+    tops, bots = [], []
+    for i in range(1000):
+        r = f"{i:03d}"
+        a = top_sum("amt", r)
+        if a > 0 or top_sum("fwd", r) > 0:
+            e = top_sum("exp", r)
+            tops.append({"num": r, "amt": a, "kept": top_sum("kept", r), "fwd": top_sum("fwd", r), "exp": e, "profit": base - e})
+    for i in range(100):
+        r = f"{i:02d}"
+        a = bot_sum("amt", r)
+        if a > 0 or bot_sum("fwd", r) > 0:
+            e = bot_sum("exp", r)
+            bots.append({"num": r, "amt": a, "kept": bot_sum("kept", r), "fwd": bot_sum("fwd", r), "exp": e, "profit": base - e})
+    wt, wb = max((x["exp"] for x in tops), default=0.0), max((x["exp"] for x in bots), default=0.0)
+    wt, wb = max(wt, 0.0), max(wb, 0.0)
+    tot = {"sales": sum(v["amt"] for v in items.values()), "net_cust": net_cust, "kept": sum(v["kept"] for v in items.values()),
+           "fwd": sum(v["fwd"] for v in items.values()), "send": sum(v["send"] for v in items.values()),
+           "fwd_net": fwd_net, "base": base, "worst_top": wt, "worst_bot": wb, "worst_profit": base - wt - wb,
+           "fwd_disc": sum(v["fwd"] for v in items.values()) - fwd_net}
+    return {"items": items, "tops": tops, "bots": bots, "tot": tot}
+
+
+def dealer_auto(st, keep_pct, budget):
+    """ตั้งเพดานอัตโนมัติ: จ่ายสุทธิ (ส่วนที่เจ้ามือแบกเอง) ต่อ 'เลขที่ออก' ไม่เกิน budget  คืน {"เลข|ประเภท": เพดานรับ}"""
+    keep = max(0.0, min(100.0, float(keep_pct or 100))) / 100.0
+    rates, half, closed = st["rates"], st["half"], st["closed"]
+    k, c0, w, locked = {}, {}, {}, set()
+    for key, v in st["sold"].items():
+        n, t = key
+        S, F0 = v["amt"], st["fwd"].get(key, {}).get("amt", 0.0)
+        fp0 = st["fwd"].get(key, {}).get("pay", 0.0)
+        hf = 0.5 if n in half else 1.0
+        rco = rates[_D_RATE_KEY[t]]
+        k[key] = max(S - F0, 0.0) if n in closed else min(S * keep, max(S - F0, 0.0))
+        if n in closed:
+            locked.add(key)
+        c0[key] = (v["pay"] - fp0 - (S - F0) * rco) * hf
+        w[key] = rco * hf
+
+    def contrib_top(r):
+        ks = [(r, "3ตัวตรง"), (r[-2:], "2ตัวบน")] + [(p, "3ตัวโต๊ด") for p in {"".join(x) for x in itertools.permutations(r)} if p != r] + [(d, "วิ่งบน") for d in set(r)]
+        return [x for x in ks if x in k]
+
+    def contrib_bot(r):
+        return [x for x in [(r, "2ตัวล่าง")] + [(d, "วิ่งล่าง") for d in set(r)] if x in k]
+    groups = [g for g in [contrib_top(f"{i:03d}") for i in range(1000)] + [contrib_bot(f"{i:02d}") for i in range(100)] if g]
+    L = float(budget)
+    for _ in range(80):
+        changed = False
+        for g in groups:
+            E = sum(c0[x] + k[x] * w[x] for x in g)
+            if E <= L + 1e-6:
+                continue
+            adj = [x for x in g if x not in locked and k[x] > 0]
+            if not adj:
+                continue
+            fixed = sum(c0[x] + k[x] * w[x] for x in g if x not in adj)
+            allowed = L - fixed
+            cur = sum(k[x] * w[x] for x in adj)
+            f = max(allowed / cur, 0.0) if cur > 0 else 0.0
+            f = min(f, 1.0)
+            if allowed <= 0:
+                f = 0.0
+            for x in adj:
+                k[x] = max(k[x] * f - 0.005, 0.0) if f < 1.0 else k[x]
+            changed = True
+        if not changed:
+            break
+    out = {}
+    for key, v in st["sold"].items():
+        if key in locked:
+            continue
+        if k[key] < v["amt"] * keep - 0.005:
+            out[f"{key[0]}|{key[1]}"] = round(k[key], 2)
+    return out
+
+
+def dealer_spread(st, keep_pct, target_send):
+    """สูตรกระจายเลข: ต้องการ 'ยอดส่งออกรวม' = target_send  ระบบหาเพดานจ่ายต่อเลข (ยอดสู้) ที่ทำให้ยอดส่งรวมใกล้เป้าที่สุด
+    โดยลดเลขที่เสี่ยงสุดก่อน (ตัดยอดสูงสุดลงมาเสมอกัน) แทนการตีออกเท่ากันทุกเลข  คืน (over, budget, ยอดส่งจริง)"""
+    keep = max(0.0, min(100.0, float(keep_pct or 100)))
+    base_plan = {"keep": keep, "caps": {}, "over": {}}
+    base = dealer_compute(st, base_plan)["tot"]["send"]
+    target = float(target_send or 0)
+    if target <= base + 0.5:
+        return {}, 0.0, base
+    hi = max(1.0, sum(v["amt"] for v in st["sold"].values()) * 600.0)
+    lo = 0.0
+    best = (dealer_auto(st, keep, 0.0001), 0.0001)
+    for _ in range(22):
+        mid = (lo + hi) / 2
+        over = dealer_auto(st, keep, mid)
+        sent = dealer_compute(st, {"keep": keep, "caps": {}, "over": over})["tot"]["send"]
+        if sent >= target:
+            best, lo = (over, mid), mid
+        else:
+            hi = mid
+    over, b = best
+    return over, b, dealer_compute(st, {"keep": keep, "caps": {}, "over": over})["tot"]["send"]
+
+
+def _f(v, default=None):
+    try:
+        x = float(str(v).replace(",", "").strip())
+        return x if x >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def dealer_can_view(c, me, dname):
+    d = get_user(c, dname)
+    if not d:
+        return None
+    if me["username"] == d["username"] or me["role"] == "Admin" or d["username"] in get_subtree(c, me["username"]):
+        return d
+    return None
+
+
+def dealer_enable(c, me, form):
+    if me["role"] != "Admin":
+        return False, "เฉพาะแอดมินกำหนดสิทธิ์เจ้ามือรายย่อย"
+    u = get_user(c, str(form.get("username", "")))
+    if not u or u["role"] == "Admin":
+        return False, "ไม่พบผู้ใช้"
+    on = str(form.get("on", "")) == "1"
+    c.execute("UPDATE Users SET dealer_enabled=%s WHERE id=%s", (on, u["id"]))
+    return True, f"{'เปิด' if on else 'ปิด'}สิทธิ์เจ้ามือรายย่อยของ {u['username']} แล้ว"
+
+
+def dealer_plan_apply(c, me, form):
+    """บันทึกแผน: op=caps (สัดส่วน/เพดานต่อประเภท) | auto (คำนวณอั้นอัตโนมัติจากยอดสู้) | clear"""
+    if not is_dealer(c, me["id"]):
+        return False, "บัญชีนี้ไม่มีสิทธิ์เจ้ามือรายย่อย"
+    camp, f, _o = _d_campaign(c, str(form.get("c", "")))
+    if not camp:
+        return False, "ไม่พบงวด"
+    op = str(form.get("op", "caps"))
+    plan = dealer_plan_load(c, me, camp)
+    if op == "clear":
+        plan = _d_default_plan()
+        dealer_plan_save(c, me, camp, plan)
+        return True, "ล้างแผนของงวดนี้แล้ว (ถือสู้ 100% ไม่ตีออก)"
+    keep = _f(form.get("keep"), 100.0)
+    plan["keep"] = min(max(keep, 0.0), 100.0)
+    plan["caps"] = {t: v for t in _D_TYPES for v in [_f(form.get("cap_" + t))] if v is not None}
+    budget = _f(form.get("budget"))
+    plan["budget"] = budget
+    if op == "spread":
+        tgt = _f(form.get("target_send"))
+        if not tgt:
+            return False, "กรุณาใส่ยอดที่ต้องการส่งออกรวม (บาท)"
+        st = dealer_state(c, me, camp, f)
+        over, b, got = dealer_spread(st, plan["keep"], tgt)
+        plan["over"], plan["budget"] = over, (round(b, 2) if b else None)
+        msg = f"กระจายเลขแล้ว: เป้าส่งออก {tgt:,.0f} → ได้ {got:,.2f} (เพดานจ่ายต่อเลข ≈ {b:,.0f} · ปรับ {len(over)} รายการ)"
+    elif op == "auto":
+        if not budget:
+            return False, "กรุณาใส่ยอดสู้ (จ่ายสูงสุดต่อเลข) ก่อนกด ใช้ค่านี้"
+        st = dealer_state(c, me, camp, f)
+        plan["over"] = dealer_auto(st, plan["keep"], budget)
+        msg = f"ตั้งค่าอั้นอัตโนมัติแล้ว: ปรับเพดาน {len(plan['over'])} รายการ (ยอดสู้ {budget:,.0f} · ถือสู้ {plan['keep']:g}%)"
+    else:
+        plan["over"] = {}
+        msg = f"บันทึกสัดส่วนถือสู้ {plan['keep']:g}% และเพดานต่อประเภทแล้ว"
+    dealer_plan_save(c, me, camp, plan)
+    return True, msg
+
+
+def dealer_forward(c, me, form):
+    """สั่งตัดส่งเจ้า: สร้างบิลซื้อของเจ้ามือกับ upline เฉพาะส่วนที่เกินเพดาน (ทำได้ซ้ำ ระบบส่งเฉพาะส่วนต่างที่ยังไม่ได้ส่ง)"""
+    if not is_dealer(c, me["id"]):
+        return False, "บัญชีนี้ไม่มีสิทธิ์เจ้ามือรายย่อย"
+    camp, f, _o = _d_campaign(c, str(form.get("c", "")))
+    if not camp:
+        return False, "ไม่พบงวด"
+    ok, reason = campaign_open(camp)
+    if not ok:
+        return False, reason + " ไม่สามารถตัดส่งเจ้าได้"
+    seller = dealer_upline(c, me)
+    if not seller:
+        return False, "ไม่พบ upline/บริษัทสำหรับส่งยอด"
+    c.execute("SELECT 1 FROM Users WHERE id=%s FOR UPDATE", (me["id"],))          # กันกดซ้ำพร้อมกัน
+    st = dealer_state(c, me, camp, f)
+    comp = dealer_compute(st, dealer_plan_load(c, me, camp))
+    entries = {}
+    for (n, t), v in comp["items"].items():
+        if v["send"] > 0:
+            e = entries.setdefault(n, [n, 0.0, 0.0])
+            e[1 if t in TOP_TYPES else 2] += v["send"]
+    if not entries:
+        return False, "ไม่มียอดเกินเพดานที่ต้องส่ง (หรือส่งครบแล้ว)"
+    blocked = get_blocked_map(c, camp["lotto_name"], camp["draw_date"])
+    rows, rejected, invalid = make_draft_rows(st["rates"], blocked, [tuple(e) for e in entries.values()], seller["username"], "User", me["id"], camp, 10 ** 9)
+    if not rows:
+        return False, "ไม่มีรายการที่ส่งได้"
+    bill_no = generate_bill_no(c, camp["lotto_name"], camp["draw_date"], "User", me["id"])
+    total_net = sum(r[8] for r in rows)
+    acct = credit_account(c, "User", me["id"], seller)
+    if acct:
+        ok_c, why = credit_charge(c, acct, total_net, bill_no, me["username"])
+        if not ok_c:
+            return False, why
+    ts = get_thai_time().strftime("%d/%m/%Y %H:%M:%S")
+    c.executemany("INSERT INTO Transactions (draw_date, timestamp, username, customer_id, customer_name, customer_type, bill_no, num, type, amount, "
+                  "status, discount, net, payout_rate, lotto_name) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                  [(camp["draw_date"], ts, seller["username"], me["id"], me["username"], "User", bill_no, r[3], r[5], r[4], r[9], r[7], r[8], r[6],
+                    camp["lotto_name"]) for r in rows])
+    c.execute("INSERT INTO DealerForwards (dealer, bill_no, lotto_name, draw_date, total_amount, total_net, by_user, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+              (me["username"], bill_no, camp["lotto_name"], camp["draw_date"], round(sum(r[4] for r in rows), 2), round(total_net, 2), me["username"],
+               get_thai_time().strftime("%Y-%m-%d %H:%M:%S")))
+    msg = f"ตัดส่งเจ้าแล้ว: บิล {bill_no} ยอด {sum(r[4] for r in rows):,.2f} (สุทธิ {total_net:,.2f}) ส่งให้ {seller['username']} · {len(rows)} รายการ"
+    if rejected:
+        msg += " · เลขปิดรับไม่ได้ส่ง: " + ", ".join(sorted(set(rejected)))[:100]
+    return True, msg
+
+
+_DEALER_HTML = """
+<style>.pl{color:#0d6efd;font-weight:bold}.ls{color:#dc3545;font-weight:bold}.bar{height:14px;background:#0d6efd;border-radius:3px}.barwrap{background:#e9ecef;border-radius:3px}</style>
+<div class="container-fluid my-3" style="max-width:1250px">
+  <div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2">
+    <h3 class="fw-bold text-primary m-0">🎯 ระบบเจ้ามือรายย่อย</h3>
+    <form method="GET" action="{{ page }}" class="d-flex gap-2 flex-wrap align-items-center">
+      {% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+      <select name="c" class="form-select form-select-sm" style="max-width:280px" onchange="this.form.submit()">
+        {% for o in opts %}<option value="{{ o.value }}" {{ 'selected' if o.value == cur }}>{{ o.label }}</option>{% endfor %}</select>
+      {% if dealers|length > 1 %}<select name="d" class="form-select form-select-sm" style="max-width:200px" onchange="this.form.submit()">
+        {% for d in dealers %}<option value="{{ d }}" {{ 'selected' if d == dealer }}>{{ d }}</option>{% endfor %}</select>{% endif %}
+    </form>
+  </div>
+
+  {% if admin_users is not none %}
+  <details class="card shadow-sm mb-3"><summary class="card-header fw-bold" style="cursor:pointer">⚙️ กำหนดสิทธิ์เจ้ามือรายย่อย (แอดมิน)</summary>
+    <div class="card-body"><div class="row row-cols-2 row-cols-md-4 g-2">
+      {% for u in admin_users %}<div class="col"><form method="POST" action="{{ enable_action }}" class="d-flex justify-content-between border rounded p-1 px-2 align-items-center">
+        {% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+        <input type="hidden" name="username" value="{{ u.username }}"><input type="hidden" name="on" value="{{ 0 if u.on else 1 }}">
+        <span class="small">{{ u.username }} <span class="text-muted">({{ u.role }})</span></span>
+        <button class="btn btn-sm {{ 'btn-success' if u.on else 'btn-outline-secondary' }}">{{ 'เปิดอยู่' if u.on else 'ปิด' }}</button></form></div>{% endfor %}
+    </div></div></details>
+  {% endif %}
+
+  {% if note %}<div class="alert alert-info">{{ note }}</div>{% elif not data %}<div class="alert alert-warning">ไม่พบงวด</div>{% else %}
+  {% set T = data.tot %}
+  <div class="row g-2 mb-3 text-center">
+    {% for lbl, val, cls in [('ยอดซื้อจากลูกค้า', T.sales, ''), ('สุทธิที่เก็บจากลูกค้า', T.net_cust, ''), ('เก็บเอง (ถือสู้)', T.kept, 'text-primary'),
+        ('ตีออกรวม', T.fwd, 'text-warning'), ('รอส่งตอนนี้', T.send, 'text-danger'), ('กำไรถ้าไม่มีเลขถูก', T.base, 'pl' if T.base >= 0 else 'ls'),
+        ('เลวร้ายสุด (บน+ล่าง)', T.worst_profit, 'pl' if T.worst_profit >= 0 else 'ls')] %}
+    <div class="col-6 col-md"><div class="card shadow-sm p-2"><div class="small text-muted">{{ lbl }}</div><div class="fs-5 fw-bold {{ cls }}">{{ "{:,.2f}".format(val) }}</div></div></div>{% endfor %}
+  </div>
+  <div class="small text-muted mb-2">คำนวณจาก: ยอดสุทธิที่เก็บจากลูกค้า − ต้นทุนส่วนที่ตีออก (หักส่วนลดที่ได้จากบริษัท {{ "{:,.2f}".format(T.fwd_disc) }}) − ยอดจ่ายที่เจ้ามือต้องแบกถ้าเลขนั้นออก  ·
+    <span class="pl">น้ำเงิน = ยังมีกำไร</span> · <span class="ls">แดง = เสี่ยงขาดทุน</span> · เลขจ่ายครึ่งคิดครึ่งอัตราแล้ว</div>
+
+  {% if can_edit %}
+  <form method="GET" action="{{ page }}" class="card shadow-sm p-3 mb-3 border-primary" id="planForm">
+    {% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <input type="hidden" name="c" value="{{ cur }}"><input type="hidden" name="preview" value="1">
+    <h5 class="fw-bold">🧮 ตั้งเพดานรับ / ยอดสู้ {% if preview %}<span class="badge bg-warning text-dark">กำลังดูตัวอย่าง — ยังไม่ได้บันทึก</span>{% endif %}</h5>
+    <div class="row g-3 align-items-end">
+      <div class="col-md-4"><label class="form-label small fw-bold mb-0">ถือสู้ % ของยอดซื้อแต่ละเลข: <b id="kv">{{ "%g"|format(plan.keep) }}</b>%</label>
+        <input type="range" min="0" max="100" step="5" name="keep" value="{{ plan.keep }}" class="form-range" oninput="document.getElementById('kv').textContent=this.value" onchange="this.form.submit()">
+        <div class="small text-muted">เช่น 70–80% = เก็บเอง 70–80% ส่งออกที่เหลือ</div></div>
+      <div class="col-md-4"><label class="form-label small fw-bold mb-0">ยอดสู้: จ่ายสุทธิสูงสุดต่อเลขที่ออก (บาท)</label>
+        <input type="number" min="0" step="any" name="budget" value="{{ ('%g'|format(plan.budget)) if plan.budget else '' }}" class="form-control" placeholder="เช่น 30000" onchange="this.form.submit()">
+        <input type="range" min="0" max="{{ slider_max }}" step="{{ slider_step }}" value="{{ plan.budget or 0 }}" class="form-range mt-1" oninput="this.form.budget.value=this.value" onchange="this.form.submit()"></div>
+      <div class="col-md-4"><div class="small text-muted">ปรับ 2 ช่องนี้แล้วระบบแสดงผลตัวอย่างทันที ถ้าพอใจกด "ใช้ค่านี้" เพื่อบันทึกเพดานอัตโนมัติ</div></div>
+    </div>
+    <div class="row g-2 mt-2">{% for t in types %}<div class="col-6 col-md-2"><label class="small mb-0">เพดาน {{ t }}/เลข</label>
+      <input type="number" min="0" step="any" name="cap_{{ t }}" value="{{ plan.caps.get(t, '') }}" class="form-control form-control-sm" placeholder="ไม่จำกัด"></div>{% endfor %}</div>
+    <div class="d-flex flex-wrap gap-2 mt-3">
+      <button class="btn btn-outline-primary fw-bold">👁️ ดูตัวอย่าง</button>
+      <button formmethod="POST" formaction="{{ plan_action }}" name="op" value="auto" class="btn btn-success fw-bold">✅ ใช้ค่านี้ (ตั้งอั้นอัตโนมัติ)</button>
+      <span class="input-group" style="max-width:360px"><input type="number" min="0" step="any" name="target_send" class="form-control" placeholder="ยอดส่งออกเพิ่มที่ต้องการ (บาท)">
+        <button formmethod="POST" formaction="{{ plan_action }}" name="op" value="spread" class="btn btn-info fw-bold" title="ลดเลขที่เสี่ยงสุดก่อน จนยอดส่งออกรวมได้ตามเป้า">⚖️ กระจายเลข</button></span>
+      <button formmethod="POST" formaction="{{ plan_action }}" name="op" value="caps" class="btn btn-outline-success fw-bold">💾 บันทึกเฉพาะ % และเพดานต่อประเภท</button>
+      <button formmethod="POST" formaction="{{ plan_action }}" name="op" value="clear" class="btn btn-outline-secondary" onclick="return confirm('ล้างแผนของงวดนี้?')">ล้างแผน</button>
+      <span class="flex-grow-1"></span>
+      <button formmethod="POST" formaction="{{ fwd_action }}" class="btn btn-danger fw-bold" {{ 'disabled' if not send_saved }}
+        onclick="return confirm('สั่งตัดส่งเจ้า? จะสร้างบิลซื้อกับ upline ยอด {{ "{:,.2f}".format(send_saved) }} (ตามแผนที่บันทึกไว้ ไม่ใช่ตัวอย่าง)')">📤 สั่งตัดส่งเจ้า ({{ "{:,.0f}".format(send_saved) }})</button>
+    </div>
+    {% if preview %}<div class="small text-warning mt-1">⚠️ "สั่งตัดส่งเจ้า" ใช้แผนที่ <b>บันทึกแล้ว</b> เท่านั้น — กด "ใช้ค่านี้" ก่อนถ้าต้องการใช้ตัวอย่างนี้</div>{% endif %}
+  </form>
+  {% endif %}
+
+  <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+    <form method="GET" action="{{ page }}" class="d-flex gap-2 align-items-center flex-wrap">
+      {% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+      <input type="hidden" name="c" value="{{ cur }}"><input type="hidden" name="d" value="{{ dealer }}">
+      {% if preview %}<input type="hidden" name="preview" value="1"><input type="hidden" name="keep" value="{{ plan.keep }}"><input type="hidden" name="budget" value="{{ plan.budget or '' }}">{% endif %}
+      <span class="small fw-bold">เรียง:</span>
+      <select name="sort" class="form-select form-select-sm" style="width:auto" onchange="this.form.submit()">
+        {% for v, l in [('num','ตามเลข'),('amt','ตามยอดซื้อ (มาก→น้อย)'),('exp','ตามยอดจ่ายถ้าออก (มาก→น้อย)'),('profit','ตามกำไร (ขาดทุนสุดก่อน)')] %}<option value="{{ v }}" {{ 'selected' if v == sort }}>{{ l }}</option>{% endfor %}</select>
+      <label class="small"><input type="checkbox" name="all" value="1" {{ 'checked' if show_all }} onchange="this.form.submit()"> แสดงทุกเลข</label>
+    </form>
+    <a class="btn btn-sm btn-outline-dark ms-auto" target="_blank" href="{{ summary_url }}">🖨️ ใบปะหน้า/สรุปเก็บเงิน</a>
+  </div>
+  {% if can_edit %}
+  <details class="card shadow-sm mb-3" {{ 'open' if blocks }}><summary class="card-header fw-bold" style="cursor:pointer">🚫 เลขอั้น / จ่ายครึ่ง ของเจ้ามือเอง (มีผลกับลูกค้าของคุณเท่านั้น)</summary>
+    <div class="card-body">
+      <form method="POST" action="{{ block_action }}" class="row g-2 align-items-end mb-2">
+        {% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}<input type="hidden" name="c" value="{{ cur }}">
+        <div class="col-md-5"><label class="form-label small fw-bold mb-0">เลข (1-3 หลัก คั่นด้วยเว้นวรรค/คอมม่า)</label><input name="nums" class="form-control" placeholder="12 21 456"></div>
+        <div class="col-auto"><select name="status" class="form-select"><option>ปิดรับ</option><option>จ่ายครึ่ง</option></select></div>
+        <div class="col-auto"><button name="op" value="add" class="btn btn-danger">➕ เพิ่ม</button></div>
+        <div class="col-auto"><a class="btn btn-outline-dark" target="_blank" href="{{ summary_url }}&view=blocks">🖨️ ตารางสำหรับลูกค้า</a></div>
+      </form>
+      {% for b in blocks %}
+      <form method="POST" action="{{ block_action }}" class="d-inline">{% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+        <input type="hidden" name="c" value="{{ cur }}"><input type="hidden" name="num" value="{{ b.num }}"><input type="hidden" name="op" value="del">
+        <button class="btn btn-sm {{ 'btn-danger' if b.status == 'ปิดรับ' else 'btn-warning' }} me-1 mb-1" title="{{ b.status }} — กดเพื่อลบ">{{ b.num }} {{ '🚫' if b.status == 'ปิดรับ' else '½' }} ✕</button></form>
+      {% else %}<span class="text-muted small">ยังไม่มีเลขอั้นของคุณ (เลขอั้นของระบบ/บริษัทใช้กับทุกคนอยู่แล้ว)</span>{% endfor %}
+      <hr class="my-2"><b class="small">🔢 เพดานรับรายเลข (ยอดรวมทุกประเภทต่อเลข จากลูกค้าทั้งหมดของคุณ)</b>
+      <form method="POST" action="{{ block_action }}" class="row g-2 align-items-end my-1">
+        {% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}<input type="hidden" name="c" value="{{ cur }}">
+        <div class="col-md-4"><input name="nums" class="form-control form-control-sm" placeholder="เลข เช่น 12 21 456"></div>
+        <div class="col-md-3"><input name="cap" type="number" min="0" step="any" class="form-control form-control-sm" placeholder="เพดานรับ (บาท)"></div>
+        <div class="col-auto"><button name="op" value="capadd" class="btn btn-sm btn-primary">➕ ตั้งเพดาน</button></div></form>
+      {% for b in caps %}
+      <form method="POST" action="{{ block_action }}" class="d-inline">{% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+        <input type="hidden" name="c" value="{{ cur }}"><input type="hidden" name="num" value="{{ b.num }}"><input type="hidden" name="op" value="capdel">
+        <button class="btn btn-sm {{ 'btn-danger' if b.used >= b.cap else 'btn-outline-primary' }} me-1 mb-1" title="กดเพื่อลบเพดาน">{{ b.num }} · {{ "{:,.0f}".format(b.used) }}/{{ "{:,.0f}".format(b.cap) }} ✕</button></form>
+      {% endfor %}
+      <div class="small text-muted mt-1">เลขอั้นเฉพาะเจ้ามือถูกตรวจตอนคีย์โพย/คีย์ด่วน/แชท และตรวจเลขปิดรับซ้ำตอนออกบิล · กดที่เลขเพื่อลบ</div>
+    </div></details>
+  <details class="card shadow-sm mb-3"><summary class="card-header fw-bold" style="cursor:pointer">📤 ส่งสรุป (อีเมล / แชทลูกค้า)</summary>
+    <div class="card-body"><form method="POST" action="{{ send_action }}" class="row g-2 align-items-end">
+      {% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}<input type="hidden" name="c" value="{{ cur }}">
+      <div class="col-md-5"><label class="form-label small fw-bold mb-0">อีเมลผู้รับ (คั่นหลายอีเมลด้วย , )</label><input name="to" class="form-control" placeholder="name@example.com"></div>
+      <div class="col-auto"><button name="op" value="mail" class="btn btn-primary">✉️ ส่งใบปะหน้าทางอีเมล</button></div>
+      <div class="col-auto"><button name="op" value="chat" class="btn btn-success" onclick="return confirm('ส่งยอดเก็บเงินให้ลูกค้าทุกคนที่ผูกแชทไว้?')">💬 ส่งยอดเก็บเงินให้ลูกค้าทางแชท</button></div>
+      <div class="col-12 small text-muted">ตั้งค่าอีเมลของคุณได้ที่เมนู ✉️ ตั้งค่าอีเมล (ตั้งครั้งเดียว ระบบจำไว้) · แชท LINE/Messenger/Telegram ตั้งที่ 🔗 เชื่อมต่อแชท</div>
+    </form></div></details>
+  {% endif %}
+
+  <div class="row g-3">
+    <div class="col-lg-7"><h6 class="fw-bold">ฝั่งบน (3 ตัวตรง/โต๊ด · 2 ตัวบน · วิ่งบน) — เรียงตามเลขที่ออก 000–999</h6>
+      {{ table(data.tops)|safe }}</div>
+    <div class="col-lg-5"><h6 class="fw-bold">ฝั่งล่าง (2 ตัวล่าง · วิ่งล่าง) — 00–99</h6>{{ table(data.bots)|safe }}
+      <h6 class="fw-bold mt-3">📊 เลขยอดซื้อสูงสุด 15 อันดับ (ฝั่งบน)</h6>
+      {% for x in chart %}<div class="d-flex align-items-center gap-2 small mb-1"><span style="width:38px"><b>{{ x.num }}</b></span>
+        <div class="barwrap flex-grow-1"><div class="bar" style="width:{{ x.pct }}%"></div></div><span style="width:90px" class="text-end">{{ "{:,.0f}".format(x.amt) }}</span></div>
+      {% else %}<div class="text-muted small">ยังไม่มียอดซื้อ</div>{% endfor %}</div>
+  </div>
+  {% endif %}
+</div>
+"""
+
+_D_TABLE = """<div class="table-responsive" style="max-height:560px;overflow:auto"><table class="table table-sm table-bordered text-center align-middle mb-1" style="font-size:.85rem">
+<thead class="table-dark sticky-top"><tr><th>เลข</th><th>ยอดซื้อ</th><th>เก็บเอง</th><th>ตีออก</th><th>จ่ายถ้าออก</th><th>กำไร/ขาดทุน</th></tr></thead><tbody>
+{% for x in rows %}<tr><td><b>{{ x.num }}</b></td><td>{{ "{:,.0f}".format(x.amt) }}</td><td>{{ "{:,.0f}".format(x.kept) }}</td><td>{{ "{:,.0f}".format(x.fwd) }}</td>
+<td>{{ "{:,.0f}".format(x.exp) }}</td><td class="{{ 'pl' if x.profit >= 0 else 'ls' }}">{{ "{:,.0f}".format(x.profit) }}</td></tr>
+{% else %}<tr><td colspan="6" class="text-muted">ไม่มีข้อมูล</td></tr>{% endfor %}</tbody></table></div>
+{% if more %}<div class="small text-muted">แสดง {{ rows|length }} จาก {{ total }} เลข — ติ๊ก "แสดงทุกเลข" เพื่อดูทั้งหมด</div>{% endif %}"""
+
+
+def render_dealer(c, me, page, hidden, qs, q, urls):
+    """หน้าหลักเจ้ามือรายย่อย  q = query params (dict)  urls = {plan, forward, enable, summary}"""
+    mine = is_dealer(c, me["id"])
+    is_admin = me["role"] == "Admin"
+    c.execute("SELECT username FROM Users WHERE COALESCE(dealer_enabled,FALSE)=TRUE ORDER BY username")
+    all_dealers = [r[0] for r in c.fetchall()]
+    sub = set(get_subtree(c, me["username"]))
+    dealers = [d for d in all_dealers if is_admin or d in sub]
+    dname = q.get("d") or (me["username"] if mine else (dealers[0] if dealers else ""))
+    admin_users = None
+    if is_admin:
+        c.execute("SELECT username, role, COALESCE(dealer_enabled,FALSE) FROM Users WHERE LOWER(role)<>'admin' ORDER BY username LIMIT 500")
+        admin_users = [{"username": r[0], "role": r[1], "on": r[2]} for r in c.fetchall()]
+    camp, cur, opts = _d_campaign(c, q.get("c", ""))
+    base = {"page": page, "hidden": hidden, "opts": opts, "cur": cur, "dealers": dealers or [dname], "dealer": dname, "admin_users": admin_users,
+            "enable_action": urls["enable"], "data": None, "note": None, "can_edit": False, "types": _D_TYPES}
+    dealer = dealer_can_view(c, me, dname) if dname else None
+    if not dealer or not is_dealer(c, dealer["id"]):
+        base["note"] = ("ยังไม่มีผู้ใช้ที่ได้รับสิทธิ์เจ้ามือรายย่อย — แอดมินเปิดสิทธิ์ได้ที่แผง ⚙️ ด้านบน" if is_admin else
+                        "บัญชีของคุณยังไม่ได้รับสิทธิ์เจ้ามือรายย่อย กรุณาติดต่อแอดมิน")
+        return _Jinja(_DEALER_HTML, autoescape=True).render(**base, table=lambda r: "", plan=_d_default_plan(), chart=[], sort="num", show_all=False,
+                                                            preview=False, summary_url="", plan_action="", fwd_action="", slider_max=0, slider_step=1000, send_saved=0, send_action="", blocks=[], caps=[], block_action="")
+    if not camp:
+        base["note"] = "ยังไม่มีงวดหวย"
+        return _Jinja(_DEALER_HTML, autoescape=True).render(**base, table=lambda r: "", plan=_d_default_plan(), chart=[], sort="num", show_all=False,
+                                                            preview=False, summary_url="", plan_action="", fwd_action="", slider_max=0, slider_step=1000, send_saved=0, send_action="", blocks=[], caps=[], block_action="")
+    plan = dealer_plan_load(c, dealer, camp)
+    st = dealer_state(c, dealer, camp, cur)
+    send_saved = dealer_compute(st, plan)["tot"]["send"]
+    preview = bool(q.get("preview")) and dealer["id"] == me["id"]
+    if preview:
+        k, b = _f(q.get("keep"), plan["keep"]), _f(q.get("budget"))
+        plan = dict(plan, keep=min(k, 100.0), budget=b, over=dealer_auto(st, min(k, 100.0), b) if b else {})
+        plan["caps"] = {t: v for t in _D_TYPES for v in [_f(q.get("cap_" + t))] if v is not None}
+    data = dealer_compute(st, plan)
+    sort, show_all = q.get("sort", "num"), bool(q.get("all"))
+    keyf = {"num": lambda x: x["num"], "amt": lambda x: -x["amt"], "exp": lambda x: -x["exp"], "profit": lambda x: x["profit"]}.get(sort, lambda x: x["num"])
+    LIM = 150
+    tbl = _Jinja(_D_TABLE, autoescape=True)
+
+    def table(rows):
+        rs = sorted(rows, key=keyf)
+        return tbl.render(rows=rs if show_all else rs[:LIM], more=(not show_all and len(rs) > LIM), total=len(rs))
+    top15 = sorted(data["tops"], key=lambda x: -x["amt"])[:15]
+    mx = max((x["amt"] for x in top15), default=0) or 1
+    est = max(data["tot"]["sales"], 1)
+    step = 1000 if est < 500000 else 10000
+    slider_max = int(max(100000, est) // step * step)
+    return _Jinja(_DEALER_HTML, autoescape=True).render(
+        **{**base, "data": data, "can_edit": dealer["id"] == me["id"], "plan": plan, "preview": preview, "sort": sort, "show_all": show_all, "table": table,
+           "chart": [{"num": x["num"], "amt": x["amt"], "pct": round(x["amt"] / mx * 100)} for x in top15], "plan_action": urls["plan"], "fwd_action": urls["forward"], "send_action": urls.get("send", ""), "block_action": urls.get("block", ""), "blocks": dealer_blocks_list(c, dealer, camp), "caps": dealer_caps_list(c, dealer, camp),
+           "summary_url": f"{urls['summary']}?c={quote(cur)}&d={quote(dealer['username'])}{qs}", "slider_max": slider_max, "slider_step": step, "send_saved": send_saved})
+
+
+def render_dealer_summary(c, me, q):
+    """ใบปะหน้า + สรุปยอดเก็บเงิน (หน้าเต็มสำหรับพิมพ์)  view=blocks → ตารางเลขอั้น"""
+    if q.get("view") == "blocks":
+        return render_dealer_blocks_print(c, me, q)
+    dealer = dealer_can_view(c, me, q.get("d") or me["username"])
+    camp, cur, _o = _d_campaign(c, q.get("c", ""))
+    if not dealer or not camp or not is_dealer(c, dealer["id"]):
+        return "<meta charset='utf-8'><p>ไม่พบข้อมูล หรือไม่มีสิทธิ์</p>"
+    where, wargs = _sales_filter(c, cur)
+    c.execute("SELECT customer_id, MAX(customer_name), COUNT(DISTINCT bill_no), COALESCE(SUM(amount),0), COALESCE(SUM(discount),0), COALESCE(SUM(net),0) "
+              "FROM Transactions WHERE username=%s AND COALESCE(customer_type,'Customer')='Customer'" + where + " GROUP BY customer_id ORDER BY MAX(customer_name)",
+              (dealer["username"], *wargs))
+    custs = [{"name": r[1] or f"#{r[0]}", "bills": r[2], "amt": float(r[3]), "disc": float(r[4]), "net": float(r[5])} for r in c.fetchall()]
+    c.execute("SELECT bill_no, total_amount, total_net, created_at FROM DealerForwards WHERE dealer=%s AND lotto_name=%s AND draw_date=%s ORDER BY id",
+              (dealer["username"], camp["lotto_name"], camp["draw_date"]))
+    fw = [{"bill": r[0], "amt": float(r[1]), "net": float(r[2]), "at": r[3]} for r in c.fetchall()]
+    st = dealer_state(c, dealer, camp, cur)
+    comp = dealer_compute(st, dealer_plan_load(c, dealer, camp))
+    T = comp["tot"]
+    upl = dealer_upline(c, dealer)
+    html = """<!doctype html><html lang="th"><head><meta charset="utf-8"><title>ใบปะหน้า</title>
+<style>body{font-family:Tahoma,'Loma',sans-serif;max-width:820px;margin:20px auto;color:#111}h2{margin:0}table{width:100%;border-collapse:collapse;margin:8px 0}
+th,td{border:1px solid #999;padding:4px 8px;text-align:right}th{background:#eee}td:first-child,th:first-child{text-align:left}.c{text-align:center}
+.big{font-size:1.15rem;font-weight:bold}@media print{.np{display:none}}</style></head><body>
+<div class="np" style="text-align:right"><button onclick="window.print()">🖨️ พิมพ์</button></div>
+<div class="c"><h2>ใบปะหน้า / สรุปยอดเก็บเงิน</h2><div>{{ camp }}</div><div>เจ้ามือ: <b>{{ dealer }}</b> · พิมพ์เมื่อ {{ now }}</div></div>
+<h4>1) ยอดเก็บเงินจากลูกค้า</h4>
+<table><tr><th>ลูกค้า</th><th>บิล</th><th>ยอดซื้อ</th><th>ส่วนลด</th><th>ยอดเก็บ (สุทธิ)</th></tr>
+{% for r in custs %}<tr><td>{{ r.name }}</td><td>{{ r.bills }}</td><td>{{ "{:,.2f}".format(r.amt) }}</td><td>{{ "{:,.2f}".format(r.disc) }}</td><td>{{ "{:,.2f}".format(r.net) }}</td></tr>{% endfor %}
+<tr class="big"><td>รวม</td><td>{{ custs|sum(attribute='bills') }}</td><td>{{ "{:,.2f}".format(custs|sum(attribute='amt')) }}</td><td>{{ "{:,.2f}".format(custs|sum(attribute='disc')) }}</td><td>{{ "{:,.2f}".format(custs|sum(attribute='net')) }}</td></tr></table>
+<h4>2) ยอดที่ตีออกให้ {{ upline }}</h4>
+<table><tr><th>เลขที่บิล</th><th>เวลา</th><th>ยอดส่ง</th><th>ยอดสุทธิที่ต้องชำระ</th></tr>
+{% for r in fw %}<tr><td>{{ r.bill }}</td><td>{{ r.at }}</td><td>{{ "{:,.2f}".format(r.amt) }}</td><td>{{ "{:,.2f}".format(r.net) }}</td></tr>{% else %}<tr><td colspan="4" class="c">ยังไม่ได้ตีออก</td></tr>{% endfor %}
+<tr class="big"><td colspan="2">รวม</td><td>{{ "{:,.2f}".format(fw|sum(attribute='amt')) }}</td><td>{{ "{:,.2f}".format(fw|sum(attribute='net')) }}</td></tr></table>
+<h4>3) สรุป</h4>
+<table><tr><td>ยอดเก็บจากลูกค้า (สุทธิ)</td><td>{{ "{:,.2f}".format(T.net_cust) }}</td></tr>
+<tr><td>หัก ต้นทุนที่ตีออก (สุทธิหลังส่วนลดที่ได้รับ)</td><td>{{ "{:,.2f}".format(T.fwd_net) }}</td></tr>
+<tr><td>ส่วนลด/ผลตอบแทนที่ได้จากการตีออก</td><td>{{ "{:,.2f}".format(T.fwd_disc) }}</td></tr>
+<tr class="big"><td>คงเหลือก่อนจ่ายรางวัล (ส่วนที่ถือสู้เอง {{ "{:,.2f}".format(T.kept) }} บาท)</td><td>{{ "{:,.2f}".format(T.base) }}</td></tr>
+<tr><td>ถ้าเลขเสี่ยงสุดออก (บน+ล่าง) เหลือ</td><td>{{ "{:,.2f}".format(T.worst_profit) }}</td></tr></table>
+</body></html>"""
+    return _Jinja(html, autoescape=True).render(camp=f"{camp['lotto_name']} งวด {camp['draw_date']}", dealer=dealer["username"], now=get_thai_time().strftime("%d/%m/%Y %H:%M"),
+                                               custs=custs, fw=fw, T=T, upline=upl["username"] if upl else "บริษัท")
+
+
+# ============================================================ ตั้งค่าส่งอีเมล (SMTP) รายผู้ใช้ + ส่งสรุปเจ้ามือทางอีเมล/แชท
+
+import smtplib
+import ssl
+from email.message import EmailMessage
+
+
+def _mail_key():
+    return hashlib.sha256((SECRET_KEY + "|mail-v1").encode()).digest()
+
+
+def _stream(key, nonce, n):
+    out, i = b"", 0
+    while len(out) < n:
+        out += hmac.new(key, nonce + i.to_bytes(4, "big"), hashlib.sha256).digest()
+        i += 1
+    return out[:n]
+
+
+def secret_encrypt(plain):
+    """เข้ารหัสรหัสผ่านที่เก็บใน DB (HMAC-SHA256 stream + MAC, คีย์มาจาก SECRET_KEY) — ถ้าเปลี่ยน SECRET_KEY ต้องกรอกรหัสผ่านใหม่"""
+    key, nonce = _mail_key(), secrets.token_bytes(12)
+    raw = plain.encode("utf-8")
+    ct = bytes(a ^ b for a, b in zip(raw, _stream(key, nonce, len(raw))))
+    tag = hmac.new(key, nonce + ct, hashlib.sha256).digest()[:16]
+    return base64.urlsafe_b64encode(nonce + tag + ct).decode()
+
+
+def secret_decrypt(token):
+    try:
+        data = base64.urlsafe_b64decode(token.encode())
+        nonce, tag, ct = data[:12], data[12:28], data[28:]
+        key = _mail_key()
+        if not hmac.compare_digest(tag, hmac.new(key, nonce + ct, hashlib.sha256).digest()[:16]):
+            return None
+        return bytes(a ^ b for a, b in zip(ct, _stream(key, nonce, len(ct)))).decode("utf-8")
+    except Exception:
+        return None
+
+
+def mail_get(c, username):
+    c.execute("SELECT host, port, security, smtp_user, pw_enc, from_name, from_email FROM UserMailSettings WHERE username=%s", (username,))
+    r = c.fetchone()
+    if not r:
+        return None
+    return {"host": r[0] or "", "port": r[1] or 587, "security": r[2] or "starttls", "user": r[3] or "", "pw_enc": r[4] or "",
+            "from_name": r[5] or "", "from_email": r[6] or ""}
+
+
+def mail_ready(m):
+    return bool(m and m["host"] and m["user"] and m["pw_enc"] and m["from_email"])
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def mail_save(c, me, form):
+    host, user = str(form.get("host", "")).strip(), str(form.get("smtp_user", "")).strip()
+    from_email = str(form.get("from_email", "")).strip() or (user if "@" in user else "")
+    sec = str(form.get("security", "starttls"))
+    try:
+        port = int(str(form.get("port", "")).strip() or {"ssl": 465, "starttls": 587}.get(sec, 25))
+    except ValueError:
+        return False, "พอร์ตไม่ถูกต้อง"
+    if not host or not user or sec not in ("ssl", "starttls", "none") or not _EMAIL_RE.match(from_email):
+        return False, "กรุณากรอก SMTP host, ชื่อผู้ใช้ และอีเมลผู้ส่งให้ถูกต้อง"
+    old = mail_get(c, me["username"])
+    pw = str(form.get("smtp_pass", ""))
+    pw_enc = secret_encrypt(pw) if pw else (old["pw_enc"] if old else "")
+    if not pw_enc:
+        return False, "กรุณากรอกรหัสผ่าน SMTP (Gmail ใช้ App password)"
+    now = get_thai_time().strftime("%Y-%m-%d %H:%M:%S")
+    vals = (host, port, sec, user, pw_enc, str(form.get("from_name", "")).strip()[:100], from_email, now, me["username"])
+    c.execute("UPDATE UserMailSettings SET host=%s, port=%s, security=%s, smtp_user=%s, pw_enc=%s, from_name=%s, from_email=%s, updated_at=%s WHERE username=%s", vals)
+    if not c.rowcount:
+        c.execute("INSERT INTO UserMailSettings (host, port, security, smtp_user, pw_enc, from_name, from_email, updated_at, username) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", vals)
+    return True, "บันทึกการตั้งค่าอีเมลแล้ว — ระบบจะใช้ค่านี้ทุกครั้งจนกว่าคุณจะเปลี่ยน"
+
+
+def send_mail(c, username, to_list, subject, html, attachments=()):
+    """ส่งอีเมลด้วยการตั้งค่า SMTP ของ 'ผู้ใช้คนนั้น'  คืน (ok, ข้อความ)"""
+    m = mail_get(c, username)
+    if not mail_ready(m):
+        return False, "ยังไม่ได้ตั้งค่าอีเมล (เมนู ✉️ ตั้งค่าอีเมล)"
+    pw = secret_decrypt(m["pw_enc"])
+    if pw is None:
+        return False, "อ่านรหัสผ่านอีเมลที่บันทึกไว้ไม่ได้ (SECRET_KEY อาจเปลี่ยน) กรุณาบันทึกรหัสผ่านใหม่"
+    to_list = [t for t in to_list if _EMAIL_RE.match(t)]
+    if not to_list:
+        return False, "ไม่มีอีเมลผู้รับที่ถูกต้อง"
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"{m['from_name']} <{m['from_email']}>" if m["from_name"] else m["from_email"]
+    msg["To"] = ", ".join(to_list)
+    msg.set_content("กรุณาเปิดอีเมลนี้ด้วยโปรแกรมที่รองรับ HTML")
+    msg.add_alternative(html, subtype="html")
+    for name, data, mime in attachments:
+        mt, _, st = mime.partition("/")
+        msg.add_attachment(data, maintype=mt, subtype=st or "octet-stream", filename=name)
+    try:
+        if m["security"] == "ssl":
+            srv = smtplib.SMTP_SSL(m["host"], m["port"], timeout=20, context=ssl.create_default_context())
+        else:
+            srv = smtplib.SMTP(m["host"], m["port"], timeout=20)
+            if m["security"] == "starttls":
+                srv.starttls(context=ssl.create_default_context())
+        with srv:
+            srv.login(m["user"], pw)
+            srv.send_message(msg)
+    except smtplib.SMTPAuthenticationError:
+        return False, "เข้าสู่ระบบอีเมลไม่สำเร็จ (ชื่อผู้ใช้/รหัสผ่านไม่ถูกต้อง — Gmail ต้องใช้ App password)"
+    except Exception as e:
+        return False, "ส่งอีเมลไม่สำเร็จ: " + str(e)[:120]
+    return True, f"ส่งอีเมลถึง {', '.join(to_list)} แล้ว"
+
+
+_MAIL_HTML = """
+<div class="container my-3" style="max-width:720px">
+  <h3 class="fw-bold text-primary">✉️ ตั้งค่าอีเมล (SMTP) ของ {{ user }}</h3>
+  <div class="alert alert-info small">ตั้งค่าครั้งเดียว ระบบเก็บไว้ในบัญชีของคุณและใช้ทุกครั้งที่ส่งอีเมล (รหัสผ่านถูกเข้ารหัสก่อนเก็บ และไม่แสดงกลับ) · Gmail: เปิดยืนยัน 2 ขั้นตอน แล้วสร้าง "App password" · host <code>smtp.gmail.com</code> พอร์ต 587 แบบ STARTTLS</div>
+  <form method="POST" action="{{ action }}" class="card shadow-sm p-3">
+    {% for k, v in hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <div class="row g-2">
+      <div class="col-md-8"><label class="form-label small fw-bold mb-0">SMTP host</label><input name="host" class="form-control" value="{{ m.host }}" placeholder="smtp.gmail.com" required></div>
+      <div class="col-md-4"><label class="form-label small fw-bold mb-0">พอร์ต</label><input name="port" class="form-control" value="{{ m.port }}"></div>
+      <div class="col-md-6"><label class="form-label small fw-bold mb-0">การเข้ารหัส</label><select name="security" class="form-select">
+        {% for v, l in [('starttls','STARTTLS (587)'),('ssl','SSL/TLS (465)'),('none','ไม่เข้ารหัส (ไม่แนะนำ)')] %}<option value="{{ v }}" {{ 'selected' if v == m.security }}>{{ l }}</option>{% endfor %}</select></div>
+      <div class="col-md-6"><label class="form-label small fw-bold mb-0">ชื่อผู้ใช้ (มักเป็นอีเมล)</label><input name="smtp_user" class="form-control" value="{{ m.user }}" required></div>
+      <div class="col-md-6"><label class="form-label small fw-bold mb-0">รหัสผ่าน / App password {% if m.has_pw %}<span class="badge bg-success">บันทึกไว้แล้ว</span>{% endif %}</label>
+        <input type="password" name="smtp_pass" class="form-control" placeholder="{{ 'เว้นว่าง = ใช้รหัสเดิม' if m.has_pw else '' }}" autocomplete="new-password"></div>
+      <div class="col-md-6"><label class="form-label small fw-bold mb-0">อีเมลผู้ส่ง</label><input name="from_email" class="form-control" value="{{ m.from_email }}" placeholder="เหมือนชื่อผู้ใช้ถ้าเว้นว่าง"></div>
+      <div class="col-12"><label class="form-label small fw-bold mb-0">ชื่อผู้ส่งที่แสดง</label><input name="from_name" class="form-control" value="{{ m.from_name }}"></div>
+    </div>
+    <div class="d-flex gap-2 mt-3 flex-wrap">
+      <button name="op" value="save" class="btn btn-success fw-bold">💾 บันทึก</button>
+      <input name="test_to" class="form-control" style="max-width:260px" placeholder="อีเมลสำหรับทดสอบส่ง">
+      <button name="op" value="test" class="btn btn-outline-primary">📨 บันทึกแล้วส่งทดสอบ</button>
+    </div>
+  </form>
+</div>
+"""
+
+
+def render_mail_settings(c, me, action, hidden):
+    m = mail_get(c, me["username"]) or {"host": "", "port": 587, "security": "starttls", "user": "", "pw_enc": "", "from_name": "", "from_email": ""}
+    m = dict(m, has_pw=bool(m["pw_enc"]))
+    return _Jinja(_MAIL_HTML, autoescape=True).render(m=m, action=action, hidden=hidden, user=me["username"])
+
+
+def mail_settings_apply(c, me, form):
+    ok, text = mail_save(c, me, form)
+    if ok and form.get("op") == "test":
+        ok2, t2 = send_mail(c, me["username"], [str(form.get("test_to", "")).strip()], "ทดสอบส่งอีเมลจากระบบหวย", "<p>ตั้งค่าอีเมลสำเร็จ ✅</p>")
+        return ok2, text + " · " + t2
+    return ok, text
+
+
+def dealer_send(c, me, form):
+    """ส่งสรุปเจ้ามือ: op=mail (ส่งใบปะหน้าทางอีเมล) | chat (ส่งยอดเก็บเงินให้ลูกค้าแต่ละคนทางแชทที่ผูกไว้)"""
+    if not is_dealer(c, me["id"]):
+        return False, "บัญชีนี้ไม่มีสิทธิ์เจ้ามือรายย่อย"
+    camp, cur, _o = _d_campaign(c, str(form.get("c", "")))
+    if not camp:
+        return False, "ไม่พบงวด"
+    op = str(form.get("op", "mail"))
+    if op == "mail":
+        to = [x.strip() for x in re.split(r"[,;\s]+", str(form.get("to", ""))) if x.strip()][:5]
+        html = render_dealer_summary(c, me, {"c": cur, "d": me["username"]})
+        return send_mail(c, me["username"], to, f"สรุปยอด {camp['lotto_name']} งวด {camp['draw_date']}", html,
+                         [(f"summary-{camp['draw_date']}.html".replace(" ", "_").replace("/", "-"), html.encode("utf-8"), "text/html")])
+    where, wargs = _sales_filter(c, cur)
+    c.execute("SELECT customer_id, MAX(customer_name), COALESCE(SUM(amount),0), COALESCE(SUM(discount),0), COALESCE(SUM(net),0) FROM Transactions "
+              "WHERE username=%s AND COALESCE(customer_type,'Customer')='Customer'" + where + " GROUP BY customer_id", (me["username"], *wargs))
+    sent = fail = 0
+    errs = []
+    for cid, name, amt, disc, net in c.fetchall():
+        c.execute("SELECT channel, external_id FROM ChannelLinks WHERE owner_username=%s AND customer_id=%s", (me["username"], cid))
+        links = c.fetchall()
+        text = (f"📋 สรุปยอด {camp['lotto_name']} งวด {camp['draw_date']}\nลูกค้า: {name}\nยอดซื้อ {float(amt):,.2f} บาท\n"
+                f"ส่วนลด {float(disc):,.2f} บาท\n💰 ยอดที่ต้องชำระ {float(net):,.2f} บาท")
+        for ch_name, ext in links:
+            ch = chan_get(c, me["username"], ch_name)
+            if not ch or not ch["enabled"]:
+                continue
+            ok, err = send_text(ch_name, ch["cfg"], ext, text)
+            sent += 1 if ok else 0
+            if not ok:
+                fail += 1
+                errs.append(err)
+    if not sent and not fail:
+        return False, "ไม่มีลูกค้าที่ผูกแชทไว้ (ให้ลูกค้าพิมพ์ ผูก รหัส ในแชทก่อน และเปิดการเชื่อมต่อที่เมนู 🔗 เชื่อมต่อแชท)"
+    return True, f"ส่งยอดเก็บเงินทางแชทแล้ว {sent} ข้อความ" + (f" · ไม่สำเร็จ {fail}: {errs[0][:80]}" if fail else "")
+
+
+# ============================================================ นำเข้าโพยจากไฟล์ (Excel / PDF / ข้อความ / รูปภาพ)
+
+IMPORT_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _normalize_lines(text):
+    """แปลงข้อความดิบเป็นรูปแบบ เลข=บน*ล่าง ทีละบรรทัด (บรรทัดที่มี = อยู่แล้วคงเดิม; 'เลข ยอด [ยอด]' แปลงให้)"""
+    out = []
+    for line in (text or "").replace("\r", "\n").split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if "=" in line or "＝" in line:
+            out.append(line)
+            continue
+        parts = re.split(r"[\s,;|\t*xX×]+", line)
+        if 2 <= len(parts) <= 3 and re.fullmatch(r"\d{1,3}", parts[0]) and all(re.fullmatch(r"\d+(?:\.\d+)?", p) for p in parts[1:]):
+            out.append(f"{parts[0]}={parts[1]}*{parts[2] if len(parts) == 3 else 0}")
+    return out
+
+
+def _fmt_num(v):
+    return f"{float(v):g}"
+
+
+def _excel_lines(data):
+    import io as _io
+    from openpyxl import load_workbook
+    wb = load_workbook(_io.BytesIO(data), read_only=True, data_only=True)
+    out, lost_zero = [], False
+    for ws in wb.worksheets:
+        for row in ws.iter_rows(values_only=True):
+            cells = [x for x in row if x is not None and str(x).strip() != ""]
+            if not cells:
+                continue
+            strs = [str(x).strip() for x in cells]
+            if any("=" in s for s in strs):
+                out.append(" ".join(strs))
+                continue
+            if len(cells) < 2:
+                continue
+            def numtxt(x):
+                if isinstance(x, bool):
+                    return None
+                if isinstance(x, (int, float)):
+                    return str(int(x)) if float(x).is_integer() else None
+                s = str(x).strip()
+                return s if re.fullmatch(r"\d{1,3}", s) else None
+            n = numtxt(cells[0])
+            amts = []
+            for x in cells[1:3]:
+                try:
+                    amts.append(float(str(x).replace(",", "")))
+                except ValueError:
+                    break
+            if n is None or not amts or len(n) > 3:
+                continue
+            if isinstance(cells[0], (int, float)) and len(n) < 3 and ws.title:
+                lost_zero = True
+            out.append(f"{n}={_fmt_num(amts[0])}*{_fmt_num(amts[1]) if len(amts) > 1 else 0}")
+    notes = ["เลขในคอลัมน์แรกเป็นตัวเลข ศูนย์นำหน้าอาจหาย (เช่น 007 → 7) กรุณาตรวจเลข 3 หลักก่อนบันทึก (หรือจัดคอลัมน์เป็นข้อความ)"] if lost_zero else []
+    return out, notes
+
+
+def _pdf_text(data):
+    import io as _io
+    from pypdf import PdfReader
+    r = PdfReader(_io.BytesIO(data))
+    return "\n".join((p.extract_text() or "") for p in r.pages[:60])
+
+
+def _ocr_space(data, filename, key):
+    boundary = "----" + secrets.token_hex(8)
+    def part(name, val, fn=None, ct=None):
+        h = f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"' + (f'; filename="{fn}"' if fn else "") + "\r\n"
+        if ct:
+            h += f"Content-Type: {ct}\r\n"
+        return h.encode() + b"\r\n" + (val if isinstance(val, bytes) else str(val).encode()) + b"\r\n"
+    body = part("apikey", key) + part("language", "tha") + part("OCREngine", "2") + part("isTable", "true") + \
+        part("file", data, filename or "image.jpg", "application/octet-stream") + f"--{boundary}--\r\n".encode()
+    req = urllib.request.Request("https://api.ocr.space/parse/image", data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(req, timeout=40) as r:
+        j = json.loads(r.read().decode("utf-8"))
+    if j.get("IsErroredOnProcessing"):
+        raise RuntimeError(str(j.get("ErrorMessage"))[:150])
+    return "\n".join(p.get("ParsedText", "") for p in (j.get("ParsedResults") or []))
+
+
+def import_extract(filename, data, pasted=""):
+    """อ่านไฟล์/ข้อความ → (text รูปแบบคีย์ด่วน, notes[])  ผู้ใช้ตรวจแก้ในช่องคีย์ด่วนก่อนบันทึกเสมอ"""
+    notes = []
+    name = (filename or "").lower()
+    if data and len(data) > IMPORT_MAX_BYTES:
+        return "", ["ไฟล์ใหญ่เกิน 8MB"]
+    try:
+        if data and name.endswith((".xlsx", ".xlsm")):
+            lines, notes = _excel_lines(data)
+        elif data and name.endswith(".pdf"):
+            raw = _pdf_text(data)
+            lines = _normalize_lines(raw)
+            if not raw.strip():
+                notes.append("PDF นี้ไม่มีข้อความ (น่าจะเป็นภาพสแกน) — ให้แปลงเป็นรูปภาพแล้วนำเข้าแบบรูป")
+        elif data and name.endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")):
+            key = os.environ.get("OCRSPACE_API_KEY", "")
+            if not key:
+                return "", ["ยังไม่ได้ตั้งค่า OCRSPACE_API_KEY (คีย์ฟรีจาก ocr.space) — การอ่านรูปจึงปิดอยู่"]
+            lines = _normalize_lines(_ocr_space(data, filename, key))
+            notes.append("อ่านจากรูปด้วยบริการภายนอก (OCR.space) อาจผิดพลาด — ตรวจทุกบรรทัดก่อนบันทึก")
+        elif data:
+            lines = _normalize_lines(data.decode("utf-8", "ignore") if not name.endswith(".xls") else "")
+            if name.endswith(".xls"):
+                notes.append("ไม่รองรับ .xls เก่า กรุณาบันทึกเป็น .xlsx")
+        else:
+            lines = _normalize_lines(pasted)
+    except Exception as e:
+        return "", ["อ่านไฟล์ไม่สำเร็จ: " + str(e)[:150]]
+    if not lines and not notes:
+        notes.append("ไม่พบรายการที่อ่านได้ (ต้องมีเลข 1-3 หลัก ตามด้วยยอด)")
+    return "\n".join(lines[:2000]), notes
+
+
+_IMPORT_JS = """
+<div class="mb-2 p-2 border rounded bg-light small" id="impBox">
+  <b>📥 นำเข้าจากไฟล์:</b>
+  <input type="file" id="impFile" accept=".xlsx,.xlsm,.pdf,.txt,.csv,.png,.jpg,.jpeg" class="form-control form-control-sm d-inline-block" style="max-width:260px">
+  <button type="button" class="btn btn-sm btn-outline-primary" onclick="impGo()">อ่านไฟล์ → ใส่ช่องคีย์ด่วน</button>
+  <span id="impMsg" class="ms-1"></span>
+</div>
+<script>
+async function impGo(){
+  const f=document.getElementById('impFile').files[0], m=document.getElementById('impMsg');
+  if(!f){m.textContent='เลือกไฟล์ก่อน';return;}
+  m.textContent='กำลังอ่าน...';
+  const fd=new FormData(); fd.append('file',f);
+  try{
+    const r=await fetch('__URL__',{method:'POST',body:fd,credentials:'same-origin'}); const j=await r.json();
+    const t=document.getElementById('quickText'); if(j.text){t.value=(t.value?t.value.trim()+'\\n':'')+j.text; t.dispatchEvent(new Event('input'));}
+    m.textContent=(j.text?('อ่านได้ '+j.text.split('\\n').length+' บรรทัด — ตรวจแล้วกดบันทึก. '):'')+(j.notes||[]).join(' | ');
+  }catch(e){m.textContent='อ่านไฟล์ไม่สำเร็จ';}
+}
+</script>
+"""
+
+
+def import_widget(url):
+    return _IMPORT_JS.replace("__URL__", url)
+
+
+def dealer_cap_check(c, seller, lotto_name, draw_date, drafts):
+    """เพดานรับรายเลขของเจ้ามือ: ยอดรวมทุกประเภทต่อเลข (บิลที่ออกแล้ว + โพยที่กำลังออกบิล) ต้องไม่เกินเพดาน
+    drafts = แถว (id, num, type, amount, ...)  คืนรายการข้อความเลขที่เกิน (ว่าง = ผ่าน)"""
+    c.execute("SELECT num, cap FROM DealerNumCaps WHERE dealer=%s AND lotto_name=%s AND draw_date=%s", (seller, lotto_name, draw_date))
+    caps = {str(n): float(v) for n, v in c.fetchall()}
+    if not caps:
+        return []
+    add = {}
+    for d in drafts:
+        n = str(d[1]).strip()
+        if n in caps:
+            add[n] = add.get(n, 0.0) + float(d[3] or 0)
+    out = []
+    for n, a in sorted(add.items()):
+        c.execute("SELECT COALESCE(SUM(amount),0) FROM Transactions WHERE username=%s AND num=%s AND lotto_name=%s AND draw_date=%s "
+                  "AND bill_no NOT IN (SELECT bill_no FROM DealerForwards WHERE dealer=%s)", (seller, n, lotto_name, draw_date, seller))
+        used = float(c.fetchone()[0] or 0)
+        if used + a > caps[n] + 1e-6:
+            out.append(f"{n} (เพดาน {caps[n]:,.0f} · รับแล้ว {used:,.0f} · เหลือ {max(caps[n] - used, 0):,.0f})")
+    return out
+
+
+def dealer_block_apply(c, me, form):
+    """เลขอั้นเฉพาะเจ้ามือ (มีผลกับลูกค้าของเจ้ามือที่คีย์โพยกับเจ้ามือคนนี้): op=add (status ปิดรับ/จ่ายครึ่ง) | del (num) | clear"""
+    if not is_dealer(c, me["id"]):
+        return False, "บัญชีนี้ไม่มีสิทธิ์เจ้ามือรายย่อย"
+    camp, _cur, _o = _d_campaign(c, str(form.get("c", "")))
+    if not camp:
+        return False, "ไม่พบงวด"
+    op, key = str(form.get("op", "add")), (me["username"], camp["lotto_name"], camp["draw_date"])
+    if op == "clear":
+        c.execute("DELETE FROM DealerBlocked WHERE dealer=%s AND lotto_name=%s AND draw_date=%s", key)
+        return True, "ล้างเลขอั้นของคุณในงวดนี้แล้ว"
+    if op == "del":
+        c.execute("DELETE FROM DealerBlocked WHERE dealer=%s AND lotto_name=%s AND draw_date=%s AND num=%s", key + (str(form.get("num", "")),))
+        return True, "ลบเลขอั้นแล้ว"
+    if op == "capdel":
+        c.execute("DELETE FROM DealerNumCaps WHERE dealer=%s AND lotto_name=%s AND draw_date=%s AND num=%s", key + (str(form.get("num", "")),))
+        return True, "ลบเพดานรายเลขแล้ว"
+    if op == "capadd":
+        nums = [n for n in re.split(r"[,\s;]+", str(form.get("nums", ""))) if n]
+        cap = _f(form.get("cap"))
+        if not nums or any(not re.fullmatch(r"\d{1,3}", n) for n in nums) or cap is None:
+            return False, "กรุณาใส่เลข (1-3 หลัก) และยอดเพดาน"
+        for n in dict.fromkeys(nums[:500]):
+            c.execute("UPDATE DealerNumCaps SET cap=%s WHERE dealer=%s AND lotto_name=%s AND draw_date=%s AND num=%s", (cap,) + key + (n,))
+            if not c.rowcount:
+                c.execute("INSERT INTO DealerNumCaps (dealer, lotto_name, draw_date, num, cap) VALUES (%s,%s,%s,%s,%s)", key + (n, cap))
+        return True, f"ตั้งเพดานรับ {cap:,.0f} บาท/เลข ให้ {len(set(nums))} เลขแล้ว (นับรวมทุกประเภท ตอนออกบิล)"
+    status = str(form.get("status", ""))
+    if status not in ("ปิดรับ", "จ่ายครึ่ง"):
+        return False, "สถานะไม่ถูกต้อง"
+    nums = [n for n in re.split(r"[,\s;]+", str(form.get("nums", ""))) if n]
+    bad = [n for n in nums if not re.fullmatch(r"\d{1,3}", n)]
+    if not nums or bad:
+        return False, "เลขไม่ถูกต้อง: " + ", ".join(bad[:5]) if bad else "กรุณาใส่เลข (1-3 หลัก คั่นด้วยเว้นวรรคหรือ ,)"
+    for n in dict.fromkeys(nums[:500]):
+        c.execute("UPDATE DealerBlocked SET status=%s WHERE dealer=%s AND lotto_name=%s AND draw_date=%s AND num=%s", (status,) + key + (n,))
+        if not c.rowcount:
+            c.execute("INSERT INTO DealerBlocked (dealer, lotto_name, draw_date, num, status) VALUES (%s,%s,%s,%s,%s)", key + (n, status))
+    return True, f"บันทึกเลข{status} {len(set(nums))} ตัวแล้ว (มีผลกับโพยที่คีย์หลังจากนี้ — เลขปิดรับตรวจซ้ำตอนออกบิลด้วย)"
+
+
+def dealer_caps_list(c, dealer, camp):
+    c.execute("SELECT num, cap FROM DealerNumCaps WHERE dealer=%s AND lotto_name=%s AND draw_date=%s ORDER BY num", (dealer["username"], camp["lotto_name"], camp["draw_date"]))
+    caps = [(r[0], float(r[1])) for r in c.fetchall()]
+    out = []
+    for n, cap in caps:
+        c.execute("SELECT COALESCE(SUM(amount),0) FROM Transactions WHERE username=%s AND num=%s AND lotto_name=%s AND draw_date=%s "
+                  "AND bill_no NOT IN (SELECT bill_no FROM DealerForwards WHERE dealer=%s)", (dealer["username"], n, camp["lotto_name"], camp["draw_date"], dealer["username"]))
+        out.append({"num": n, "cap": cap, "used": float(c.fetchone()[0] or 0)})
+    return out
+
+
+def dealer_blocks_list(c, dealer, camp):
+    c.execute("SELECT num, status FROM DealerBlocked WHERE dealer=%s AND lotto_name=%s AND draw_date=%s ORDER BY status, num", (dealer["username"], camp["lotto_name"], camp["draw_date"]))
+    return [{"num": r[0], "status": r[1]} for r in c.fetchall()]
+
+
+def render_dealer_blocks_print(c, me, q):
+    """ตารางเลขอั้น/จ่ายครึ่ง สำหรับพิมพ์หรือบันทึกเป็นภาพส่งให้ลูกค้า"""
+    dealer = dealer_can_view(c, me, q.get("d") or me["username"])
+    camp, _cur, _o = _d_campaign(c, q.get("c", ""))
+    if not dealer or not camp or not is_dealer(c, dealer["id"]):
+        return "<meta charset='utf-8'><p>ไม่พบข้อมูล หรือไม่มีสิทธิ์</p>"
+    allb = get_blocked_map_for(c, dealer["username"], camp["lotto_name"], camp["draw_date"])
+    closed = sorted(n for n, st in allb.items() if st == "ปิดรับ")
+    half = sorted(n for n, st in allb.items() if st == "จ่ายครึ่ง")
+    caps = dealer_caps_list(c, dealer, camp)
+    html = """<!doctype html><meta charset="utf-8"><title>ตารางเลขอั้น</title>
+<style>body{font-family:Loma,Tahoma,sans-serif;margin:24px;max-width:720px}h2{margin:0}.b{display:inline-block;min-width:44px;text-align:center;margin:3px;padding:4px 8px;border-radius:6px;font-weight:bold}
+.c{background:#dc3545;color:#fff}.h{background:#ffc107}@media print{button{display:none}}</style>
+<button onclick="print()">🖨️ พิมพ์</button><h2>{{ camp }}</h2><div>เจ้ามือ: {{ dealer }} · {{ now }}</div>
+<h3>🚫 เลขปิดรับ ({{ closed|length }})</h3>{% for n in closed %}<span class="b c">{{ n }}</span>{% else %}<div>ไม่มี</div>{% endfor %}
+<h3>½ เลขจ่ายครึ่ง ({{ half|length }})</h3>{% for n in half %}<span class="b h">{{ n }}</span>{% else %}<div>ไม่มี</div>{% endfor %}
+<h3>🔢 เลขรับจำกัดยอด ({{ caps|length }})</h3>{% for x in caps %}<span class="b" style="background:#0d6efd;color:#fff">{{ x.num }} ≤ {{ "{:,.0f}".format(x.cap) }}</span>{% else %}<div>ไม่มี</div>{% endfor %}"""
+    return _Jinja(html, autoescape=True).render(camp=f"{camp['lotto_name']} งวด {camp['draw_date']}", dealer=dealer["username"], closed=closed, half=half, caps=caps,
+                                                 now=get_thai_time().strftime("%d/%m/%Y %H:%M"))

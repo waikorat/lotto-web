@@ -329,6 +329,8 @@ LAYOUT = """
             <a href="/risk-control?user={{ username }}&draw={{ draw_date|urlencode }}">🛡️ ควบคุมความเสี่ยง</a>
             <a href="/credits?user={{ username }}&draw={{ draw_date|urlencode }}">💳 เครดิต</a>
             <a href="/accounts?user={{ username }}&draw={{ draw_date|urlencode }}">📒 บัญชี/รับชำระ</a>
+            <a href="/dealer?user={{ username }}&draw={{ draw_date|urlencode }}">🎯 เจ้ามือรายย่อย</a>
+            <a href="/mail-settings?user={{ username }}&draw={{ draw_date|urlencode }}">✉️ ตั้งค่าอีเมล</a>
             {% if role in ['Admin', 'Master Agent', 'Agent'] %}<a href="/integrations?user={{ username }}&draw={{ draw_date|urlencode }}">🔗 เชื่อมต่อแชท</a>{% endif %}
             {% if role == 'Admin' %}
             <a href="/audit-all?user={{ username }}&draw={{ draw_date|urlencode }}">🔍 ตรวจสอบทั้งหมด</a>
@@ -725,6 +727,27 @@ BUY_CONTENT = r"""<style>
             <input type="hidden" name="user" value="{{ username }}">
             <input type="hidden" name="draw" value="{{ draw_date }}">
             <input type="hidden" name="customer_info" value="{{ selected_target_raw }}">
+
+<div class="mb-2 p-2 border rounded bg-light small" id="impBox">
+  <b>📥 นำเข้าจากไฟล์:</b>
+  <input type="file" id="impFile" accept=".xlsx,.xlsm,.pdf,.txt,.csv,.png,.jpg,.jpeg" class="form-control form-control-sm d-inline-block" style="max-width:260px">
+  <button type="button" class="btn btn-sm btn-outline-primary" onclick="impGo()">อ่านไฟล์ → ใส่ช่องคีย์ด่วน</button>
+  <span id="impMsg" class="ms-1"></span>
+</div>
+<script>
+async function impGo(){
+  const f=document.getElementById('impFile').files[0], m=document.getElementById('impMsg');
+  if(!f){m.textContent='เลือกไฟล์ก่อน';return;}
+  m.textContent='กำลังอ่าน...';
+  const fd=new FormData(); fd.append('file',f);
+  try{
+    const r=await fetch('/import-extract',{method:'POST',body:fd,credentials:'same-origin'}); const j=await r.json();
+    const t=document.getElementById('quickText'); if(j.text){t.value=(t.value?t.value.trim()+'\n':'')+j.text; t.dispatchEvent(new Event('input'));}
+    m.textContent=(j.text?('อ่านได้ '+j.text.split('\n').length+' บรรทัด — ตรวจแล้วกดบันทึก. '):'')+(j.notes||[]).join(' | ');
+  }catch(e){m.textContent='อ่านไฟล์ไม่สำเร็จ';}
+}
+</script>
+
             <label class="form-label small fw-bold mb-1">⚡ คีย์ด่วน / วางโพย <span class="text-muted fw-normal">— เลข=บน*ล่าง คั่นด้วย , หรือขึ้นบรรทัดใหม่ · เลขยอดเท่ากัน: 14,41=10*10 · ไม่ซื้อฝั่งใดใส่ 0 เช่น 456=0*50</span></label>
             <textarea id="quickText" name="quick_text" class="form-control" rows="3" style="resize:vertical;overflow:hidden;min-height:78px;font-family:monospace"
               placeholder="14=10*10,41=10*10,45=10*20,123=100*50&#10;หรือ&#10;14,41=10*10&#10;123=100*50&#10;456=0*50" oninput="autoGrow(this)" required></textarea>
@@ -1462,6 +1485,23 @@ def create_campaign(user: str = Form(...), lotto_name: str = Form(...), draw_dat
         return RedirectResponse(url="/campaigns?" + urlencode({"user": user, "msg": "สร้างงวดหวยสำเร็จ"}), status_code=303)
     except Exception as e: return route_error(e)
 
+
+from starlette.exceptions import HTTPException as _StarletteHTTPException
+
+
+@app.exception_handler(_StarletteHTTPException)
+async def _http_exc_logger(request: Request, exc):
+    """บันทึก 404/405 ลง log (วิธี เส้นทาง หน้าที่ส่งมา) เพื่อไล่หาต้นเหตุ 405 และแสดงหน้าแจ้งที่อ่านง่าย"""
+    if exc.status_code in (404, 405):
+        print(f"WARN HTTP {exc.status_code}: {request.method} {request.url.path} referer={request.headers.get('referer')!r} "
+              f"host={request.headers.get('host')!r} proto={request.headers.get('x-forwarded-proto')!r} build={common.BUILD}")
+    if exc.status_code == 405:
+        return HTMLResponse("<meta charset='utf-8'><div style='font-family:sans-serif;max-width:560px;margin:60px auto;text-align:center'>"
+                            "<h3>⚠️ ส่งคำขอไม่สำเร็จ (405)</h3><p>เบราว์เซอร์ส่งคำขอผิดวิธี กรุณากลับไปหน้าเดิมแล้วกดปุ่มอีกครั้ง "
+                            "หากยังเป็นอีก แจ้งผู้ดูแลพร้อมเวลา — ระบบบันทึกรายละเอียดไว้ใน log แล้ว</p><a href='/campaigns'>กลับหน้าเลือกงวด</a></div>", status_code=405)
+    from fastapi.exception_handlers import http_exception_handler
+    return await http_exception_handler(request, exc)
+
 @app.get("/create-campaign")
 @app.get("/update-campaign")
 def campaign_form_get_fallback(request: Request, user: str = ""):
@@ -1683,7 +1723,7 @@ def _draft_prepare(c, user, draw, customer_info):
     rates, _src = common.get_rates(c, common.target_key(c_type, int(c_id)), lotto_name)
     if not rates:
         return None, back_to_buy(user, draw, customer_info, msg="ไม่พบเรตของผู้ซื้อรายนี้")
-    blocked = common.get_blocked_map(c, lotto_name, draw_clean)
+    blocked = common.get_blocked_map_for(c, user, lotto_name, draw_clean)
     return dict(rates=rates, blocked=blocked, camp=camp, c_id=int(c_id), c_type=c_type), None
 
 
@@ -1753,6 +1793,15 @@ def add_draft(user: str = Form(...), draw: str = Form(...), customer_info: str =
         return back_to_buy(user, draw, customer_info, msg="บันทึกไม่สำเร็จ กรุณาลองใหม่")
     finally:
         conn.close()
+
+
+@app.post("/import-extract")
+async def import_extract_route(request: Request):
+    form = await request.form()
+    f = form.get("file")
+    data = await f.read() if f is not None and hasattr(f, "read") else b""
+    text, notes = common.import_extract(getattr(f, "filename", "") or "", data[: common.IMPORT_MAX_BYTES + 1])
+    return JSONResponse({"text": text, "notes": notes})
 
 
 @app.post("/quick-add")
@@ -1839,7 +1888,7 @@ def update_draft_item(id: int = Form(...), user: str = Form(...), draw: str = Fo
             return back_to_buy(user, draw, selected, msg="ไม่พบเรตของผู้ซื้อรายนี้")
         kind = "3d" if "3ตัว" in t_type else ("2d" if "2ตัว" in t_type else "run")
         d = round(amount * common.disc_pct(rates, kind) / 100.0, 2)
-        st = common.get_blocked_map(c, lotto_name, draw_clean).get(num, "ปกติ")
+        st = common.get_blocked_map_for(c, user, lotto_name, draw_clean).get(num, "ปกติ")
         if st == "ปิดรับ":
             return back_to_buy(user, draw, selected, msg=f"เลข {num} ปิดรับ")
         c.execute("UPDATE TempDraft SET num=%s, amt_teng=%s, discount=%s, net=%s, status=%s WHERE id=%s AND username=%s",
@@ -1900,10 +1949,13 @@ def confirm_bill(request: Request, user: str = Form(...), draw: str = Form(...),
             return back_to_buy(user, draw, customer_info, msg="ไม่มีรายการในโพยร่าง")
 
         # 3) เช็คเลขอั้นซ้ำอีกครั้ง
-        blocked = common.get_blocked_map(c, lotto_name, draw_clean)
+        blocked = common.get_blocked_map_for(c, user, lotto_name, draw_clean)
         closed_now = sorted({d[1] for d in drafts if blocked.get(d[1]) == "ปิดรับ"})
         if closed_now:
             return back_to_buy(user, draw, customer_info, msg="มีเลขที่เพิ่งปิดรับ กรุณาลบก่อน: " + ", ".join(closed_now))
+        over_cap = common.dealer_cap_check(c, user, lotto_name, draw_clean, drafts)
+        if over_cap:
+            return back_to_buy(user, draw, customer_info, msg="เกินเพดานรับรายเลข กรุณาลดยอดหรือลบเลข: " + " | ".join(over_cap)[:300])
 
         bill_no = common.generate_bill_no(c, lotto_name, draw_clean, c_type, int(c_id))
         acct = common.credit_account(c, c_type, int(c_id), common.get_user(c, user))
@@ -2636,6 +2688,105 @@ async def backup_import(request: Request):
     except Exception as e:
         print("backup import error:", e)
         return RedirectResponse(url="/backup?" + urlencode({"user": user, "draw": draw, "error": "นำเข้าไม่สำเร็จ (ย้อนกลับทั้งหมดแล้ว): " + str(e)[:150]}), status_code=303)
+
+
+_DEALER_URLS = {"plan": "/dealer/plan", "forward": "/dealer/forward", "enable": "/dealer/enable", "summary": "/dealer/summary", "send": "/dealer/send", "block": "/dealer/block"}
+
+
+@app.get("/dealer", response_class=HTMLResponse)
+def dealer_page(request: Request, user: str, draw: str = "เจ้ามือรายย่อย", msg: str = None, error: str = None):
+    try:
+        q = dict(request.query_params)
+        with common.db() as conn:
+            c = conn.cursor()
+            me = common.get_user(c, user)
+            if not me:
+                return RedirectResponse(url="/login", status_code=303)
+            inner = common.render_dealer(c, me, "/dealer", {"user": user, "draw": draw}, "&" + urlencode({"user": user, "draw": draw}), q, _DEALER_URLS)
+        return Template(LAYOUT).render(username=user, role=me["role"], draw_date=draw, content=inner, msg=msg, error=error, current_close_time=None)
+    except Exception as e: return route_error(e)
+
+
+@app.get("/dealer/summary", response_class=HTMLResponse)
+def dealer_summary(request: Request, user: str):
+    try:
+        with common.db() as conn:
+            c = conn.cursor()
+            me = common.get_user(c, user)
+            if not me:
+                return RedirectResponse(url="/login", status_code=303)
+            return HTMLResponse(common.render_dealer_summary(c, me, dict(request.query_params)))
+    except Exception as e: return route_error(e)
+
+
+async def _dealer_post(request: Request, fn):
+    form = await request.form()
+    user, draw = str(form.get("user", "")), str(form.get("draw", "เจ้ามือรายย่อย"))
+    try:
+        with common.db() as conn:
+            c = conn.cursor()
+            me = common.get_user(c, user)
+            if not me:
+                return RedirectResponse(url="/login", status_code=303)
+            ok, text = fn(c, me, form)
+        q = {"user": user, "draw": draw, ("msg" if ok else "error"): text}
+        if form.get("c"):
+            q["c"] = str(form.get("c"))
+        return RedirectResponse(url="/dealer?" + urlencode(q), status_code=303)
+    except Exception as e: return route_error(e)
+
+
+@app.post("/dealer/plan")
+async def dealer_plan(request: Request):
+    return await _dealer_post(request, common.dealer_plan_apply)
+
+
+@app.post("/dealer/forward")
+async def dealer_forward_route(request: Request):
+    return await _dealer_post(request, common.dealer_forward)
+
+
+@app.post("/dealer/enable")
+async def dealer_enable_route(request: Request):
+    return await _dealer_post(request, common.dealer_enable)
+
+
+@app.post("/dealer/block")
+async def dealer_block_route(request: Request):
+    return await _dealer_post(request, common.dealer_block_apply)
+
+
+@app.post("/dealer/send")
+async def dealer_send_route(request: Request):
+    return await _dealer_post(request, common.dealer_send)
+
+
+@app.get("/mail-settings", response_class=HTMLResponse)
+def mail_settings_page(user: str, draw: str = "ตั้งค่าอีเมล", msg: str = None, error: str = None):
+    try:
+        with common.db() as conn:
+            c = conn.cursor()
+            me = common.get_user(c, user)
+            if not me:
+                return RedirectResponse(url="/login", status_code=303)
+            inner = common.render_mail_settings(c, me, "/mail-settings/save", {"user": user, "draw": draw})
+        return Template(LAYOUT).render(username=user, role=me["role"], draw_date=draw, content=inner, msg=msg, error=error, current_close_time=None)
+    except Exception as e: return route_error(e)
+
+
+@app.post("/mail-settings/save")
+async def mail_settings_save(request: Request):
+    form = await request.form()
+    user, draw = str(form.get("user", "")), str(form.get("draw", "ตั้งค่าอีเมล"))
+    try:
+        with common.db() as conn:
+            c = conn.cursor()
+            me = common.get_user(c, user)
+            if not me:
+                return RedirectResponse(url="/login", status_code=303)
+            ok, text = common.mail_settings_apply(c, me, form)
+        return RedirectResponse(url="/mail-settings?" + urlencode({"user": user, "draw": draw, ("msg" if ok else "error"): text}), status_code=303)
+    except Exception as e: return route_error(e)
 
 
 @app.get("/accounts", response_class=HTMLResponse)
